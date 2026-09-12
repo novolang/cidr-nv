@@ -1,0 +1,242 @@
+// iptrie_tests.nv — longest-prefix match, and the device face the
+// embedded probe builds.
+//
+// RED ON PURPOSE: every body under `src/` is a `todo()`, so every
+// assertion here reaches `not implemented: cidr-nv.<module>.<fn>`.
+// That is the expected result until the bodies land.
+//
+// THE ASSERTION THAT MATTERS is that the LONGER prefix wins.  A table
+// where the shorter one wins still answers every query, still passes a
+// smoke test, and routes every packet to the default gateway; the bug
+// is invisible until somebody traces a packet.  So every lookup case
+// below has two prefixes that both match and asserts which one is
+// answered.
+
+use std.test
+use std.list
+use ip
+use cidr
+use ipnet
+use iptrie
+
+@test
+fn test_the_longer_prefix_wins() [io]
+    let table = [cidr.net4(ip.ipv4(10, 0, 0, 0), 8).net,
+                 cidr.net4(ip.ipv4(10, 1, 2, 0), 24).net]
+    let t = iptrie.build4(table)
+
+    test.case("an address both prefixes hold answers the /24")
+    test.assert(iptrie.lookup4(t, ip.ipv4(10, 1, 2, 3)) == 1)
+
+    test.case("an address only the /8 holds answers the /8")
+    test.assert(iptrie.lookup4(t, ip.ipv4(10, 9, 9, 9)) == 0)
+
+    test.case("and an address neither holds answers -1 rather than a default")
+    test.assert(iptrie.lookup4(t, ip.ipv4(8, 8, 8, 8)) == 0 - 1)
+
+@test
+fn test_the_answer_is_an_index_into_the_callers_own_order() [io]
+    // The whole reason the match answers an Int: what lives beside
+    // each prefix is the caller's, and this package never sees it.
+    let table = [cidr.net4(ip.ipv4(10, 1, 2, 0), 24).net,
+                 cidr.net4(ip.ipv4(10, 0, 0, 0), 8).net]
+    let t = iptrie.build4(table)
+
+    test.case("the same two prefixes in the other order give the other index")
+    test.assert(iptrie.lookup4(t, ip.ipv4(10, 1, 2, 3)) == 0)
+    test.assert(iptrie.lookup4(t, ip.ipv4(10, 9, 9, 9)) == 1)
+
+    test.case("and the count is the number of prefixes handed over")
+    test.assert(iptrie.count4(t) == 2)
+
+@test
+fn test_a_default_route_is_a_prefix_like_any_other() [io]
+    let table = [cidr.net4(ip.ipv4(0, 0, 0, 0), 0).net,
+                 cidr.net4(ip.ipv4(10, 0, 0, 0), 8).net]
+    let t = iptrie.build4(table)
+
+    test.case("0.0.0.0/0 matches everything")
+    test.assert(iptrie.lookup4(t, ip.ipv4(8, 8, 8, 8)) == 0)
+
+    test.case("and loses to anything longer")
+    test.assert(iptrie.lookup4(t, ip.ipv4(10, 1, 1, 1)) == 1)
+
+@test
+fn test_every_matching_prefix_comes_back_longest_first() [io]
+    let table = [cidr.net4(ip.ipv4(0, 0, 0, 0), 0).net,
+                 cidr.net4(ip.ipv4(10, 0, 0, 0), 8).net,
+                 cidr.net4(ip.ipv4(10, 1, 2, 0), 24).net]
+    let t = iptrie.build4(table)
+
+    test.case("three prefixes hold this address")
+    let all = iptrie.lookup_all4(t, ip.ipv4(10, 1, 2, 3))
+    test.assert(list.len(all) == 3)
+
+    test.case("and the first is the one lookup4 would have answered")
+    test.assert(iptrie.lookup4(t, ip.ipv4(10, 1, 2, 3)) == 2)
+
+@test
+fn test_a_duplicate_prefix_is_reported_rather_than_repaired() [io]
+    let n = cidr.net4(ip.ipv4(10, 0, 0, 0), 8).net
+    let t = iptrie.build4([n, n])
+
+    test.case("both are kept, and the first wins")
+    test.assert(iptrie.count4(t) == 2)
+    test.assert(iptrie.lookup4(t, ip.ipv4(10, 1, 1, 1)) == 0)
+
+    test.case("and the second is named, because it is a configuration mistake")
+    test.assert(list.len(iptrie.duplicates4(t)) == 1)
+
+    test.case("a table with no duplicates reports none")
+    test.assert(list.len(iptrie.duplicates4(iptrie.build4([n]))) == 0)
+
+@test
+fn test_covering_asks_about_a_prefix_rather_than_an_address() [io]
+    // The route-origin question, which is not the forwarding question:
+    // a /24 is COVERED by a /8 but is not an address inside it.
+    let t = iptrie.build4([cidr.net4(ip.ipv4(10, 0, 0, 0), 8).net])
+
+    test.case("a prefix entirely inside answers the covering index")
+    test.assert(iptrie.covering4(t, cidr.net4(ip.ipv4(10, 1, 2, 0), 24).net) == 0)
+
+    test.case("a prefix that only overlaps does not")
+    test.assert(iptrie.covering4(t, cidr.net4(ip.ipv4(10, 0, 0, 0), 7).net) == 0 - 1)
+
+@test
+fn test_an_empty_table_answers_nothing() [io]
+    let t = iptrie.build4([])
+
+    test.case("no prefix, no match, no default")
+    test.assert(iptrie.count4(t) == 0)
+    test.assert(iptrie.lookup4(t, ip.ipv4(10, 0, 0, 1)) == 0 - 1)
+    test.assert(list.len(iptrie.lookup_all4(t, ip.ipv4(10, 0, 0, 1))) == 0)
+
+@test
+fn test_the_ipv6_trie_is_the_same_shape() [io]
+    let table = [cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32).net,
+                 cidr.net6(ip.ipv6(0x2001, 0x0DB8, 1, 0, 0, 0, 0, 0), 48).net]
+    let t = iptrie.build6(table)
+
+    test.case("the longer prefix wins over 128 bits too")
+    let inner = ip.ipv6(0x2001, 0x0DB8, 1, 0, 0, 0, 0, 1)
+    test.assert(iptrie.lookup6(t, inner) == 1)
+
+    test.case("an address only the /32 holds answers the /32")
+    test.assert(iptrie.lookup6(t, ip.ipv6(0x2001, 0x0DB8, 2, 0, 0, 0, 0, 1)) == 0)
+
+    test.case("a miss is a miss")
+    test.assert(iptrie.lookup6(t, ip.ipv6(0x2001, 0x0DB9, 0, 0, 0, 0, 0, 1)) == 0 - 1)
+
+    test.case("and the counts and the all-matches walk are the same")
+    test.assert(iptrie.count6(t) == 2)
+    test.assert(list.len(iptrie.lookup_all6(t, inner)) == 2)
+
+@test
+fn test_a_rule_masks_its_base_so_a_typo_is_the_rule_the_author_meant() [io]
+    // A rule with host bits set matches nothing and looks correct,
+    // which is the worst kind of configuration bug.
+    let r = iptrie.rule4(0xC0000205, 24, 7)
+
+    test.case("the constructor masks")
+    test.assert(r.base == 0xC0000200)
+    test.assert(r.prefix == 24)
+    test.assert(r.tag == 7)
+
+    test.case("and the check a firmware makes at start-up passes on it")
+    test.assert(iptrie.rule_is_normal4(r))
+
+@test
+fn test_the_device_predicates_are_the_two_lines_a_firmware_writes() [io]
+    let narrow = iptrie.rule4(0xC0000200, 24, 7)
+    let wide = iptrie.rule4(0xC0000000, 8, 1)
+
+    test.case("containment is one shift, one mask and one comparison")
+    test.assert(iptrie.rule_holds4(narrow, 0xC0000205))
+    test.assert(iptrie.rule_holds4(narrow, 0xC0000305) == false)
+
+    test.case("longest wins")
+    test.assert(iptrie.rule_beats4(narrow, wide))
+    test.assert(iptrie.rule_beats4(wide, narrow) == false)
+
+    test.case("and an equal prefix keeps the earlier rule, so a scan is stable")
+    test.assert(iptrie.rule_beats4(narrow, narrow) == false)
+
+@test
+fn test_the_unused_slot_has_a_spelling_of_its_own() [io]
+    // prefix 0 would match everything and base 0 with prefix 32 would
+    // match 0.0.0.0, so "unused" cannot be either of those.
+    let none = iptrie.rule_none4()
+
+    test.case("it is recognisable")
+    test.assert(iptrie.rule_is_none4(none))
+
+    test.case("it matches nothing")
+    test.assert(iptrie.rule_holds4(none, 0) == false)
+    test.assert(iptrie.rule_holds4(none, 0xFFFFFFFF) == false)
+
+    test.case("and it never wins")
+    test.assert(iptrie.rule_beats4(none, iptrie.rule4(0, 0, 0)) == false)
+
+    test.case("the IPv6 one behaves the same")
+    test.assert(iptrie.rule_is_none6(iptrie.rule_none6()))
+    test.assert(iptrie.rule_holds6(iptrie.rule_none6(), 0, 0) == false)
+    test.assert(iptrie.rule_beats6(iptrie.rule_none6(), iptrie.rule6(0, 0, 0, 0))
+                == false)
+
+@test
+fn test_the_ipv6_rule_masks_both_halves() [io]
+    let r = iptrie.rule6(0x20010DB800000001, 0x0000000000000001, 32, 9)
+
+    test.case("the low half goes entirely, and the high half is cut at 32 bits")
+    test.assert(r.lo == 0)
+    test.assert(r.hi == 0x20010DB800000000)
+
+    test.case("containment reads both halves")
+    test.assert(iptrie.rule_holds6(r, 0x20010DB899999999, 0x1234567812345678))
+    test.assert(iptrie.rule_holds6(r, 0x20010DB900000000, 0) == false)
+
+    test.case("and a prefix past 64 discriminates in the low half")
+    let deep = iptrie.rule6(0x20010DB800000000, 0xFFFF000000000000, 80, 1)
+    test.assert(iptrie.rule_holds6(deep, 0x20010DB800000000, 0xFFFF000000000001))
+    test.assert(iptrie.rule_holds6(deep, 0x20010DB800000000, 0) == false)
+    test.assert(iptrie.rule_beats6(deep, r))
+
+@test
+fn test_the_mask_arithmetic_is_published_because_a_device_builds_tables_with_it() [io]
+    test.case("the three boundary masks")
+    test.assert(iptrie.mask4(0) == 0)
+    test.assert(iptrie.mask4(24) == 0xFFFFFF00)
+    test.assert(iptrie.mask4(32) == 0xFFFFFFFF)
+
+    test.case("a dotted netmask converts to a prefix length")
+    test.assert(iptrie.prefix_of_mask4(0xFFFFFF00) == 24)
+    test.assert(iptrie.prefix_of_mask4(0) == 0)
+
+    test.case("and a mask that is not a run of ones is refused rather than guessed")
+    test.assert(iptrie.prefix_of_mask4(0xFF00FF00) == 0 - 1)
+
+    test.case("the table size a firmware author sizes flash with")
+    test.assert(iptrie.rule_table_bytes4(32) > 0)
+
+@test
+fn test_the_bridge_between_the_two_faces_round_trips() [io]
+    let n = cidr.net4(ip.ipv4(192, 0, 2, 0), 24).net
+
+    test.case("a host reads a network and flashes a rule")
+    let r = iptrie.rule_from_net4(n, 7)
+    test.assert(r.prefix == 24)
+    test.assert(r.tag == 7)
+
+    test.case("and the rule describes the network it came from")
+    let back = iptrie.net_from_rule4(r)
+    test.assert(back.is_ok())
+    test.assert(ipnet.eq4(back.net, n))
+
+    test.case("the IPv6 bridge round-trips too")
+    let n6 = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32).net
+    let r6 = iptrie.rule_from_net6(n6, 9)
+    test.assert(r6.prefix == 32)
+    test.assert(ipnet.eq6(iptrie.net_from_rule6(r6).net, n6))
+
+    test.case("and the unused rule describes no network")
+    test.assert(iptrie.net_from_rule4(iptrie.rule_none4()).is_ok() == false)

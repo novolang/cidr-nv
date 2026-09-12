@@ -1,0 +1,147 @@
+// iprdns_tests.nv — the reverse names, and the zone boundary people
+// get wrong.
+//
+// RED ON PURPOSE: every body under `src/` is a `todo()`, so every
+// assertion here reaches `not implemented: cidr-nv.<module>.<fn>`.
+// That is the expected result until the bodies land.
+//
+// REVERSING FOUR OCTETS IS NOT THE INTERESTING PART.  Which zone a
+// PREFIX belongs to is, because `in-addr.arpa` delegates on octet
+// boundaries only: a /24 has one zone, a /23 has two, and a /25 has
+// none of its own.  Somebody who assumes their /25 can be delegated
+// discovers otherwise after the registry has already refused them.
+
+use std.test
+use std.list
+use std.str
+use ip
+use cidr
+use iprdns
+
+@test
+fn test_an_address_reverses_least_significant_label_first() [io]
+    test.case("192.0.2.1 is 1.2.0.192.in-addr.arpa")
+    test.assert(iprdns.name4(ip.ipv4(192, 0, 2, 1)) == "1.2.0.192.in-addr.arpa")
+
+    test.case("with no trailing dot, because a query does not want one")
+    test.assert(iprdns.name4(ip.ipv4(10, 0, 0, 1)) == "1.0.0.10.in-addr.arpa")
+
+    test.case("and absolute() is what a zone file needs")
+    test.assert(iprdns.absolute("1.2.0.192.in-addr.arpa") == "1.2.0.192.in-addr.arpa.")
+
+    test.case("the suffix is published rather than spelled at each call site")
+    test.assert(iprdns.suffix4() == "in-addr.arpa")
+
+@test
+fn test_an_ipv6_name_is_always_thirty_two_nibbles() [io]
+    // Never abbreviated: the zone is defined over the full form, and
+    // an abbreviated name resolves to nothing at all.
+    test.case("::1 spells out all thirty-two")
+    let n = iprdns.name6(ip.ipv6(0, 0, 0, 0, 0, 0, 0, 1))
+    test.assert(str.len(n) == iprdns.name6_len())
+
+    test.case("and so does an address with every nibble set")
+    let full = ip.ipv6(0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF)
+    test.assert(str.len(iprdns.name6(full)) == iprdns.name6_len())
+
+    test.case("the suffix is ip6.arpa")
+    test.assert(iprdns.suffix6() == "ip6.arpa")
+
+@test
+fn test_a_name_parses_back_to_the_address_it_names() [io]
+    test.case("the round trip holds")
+    let a = ip.ipv4(192, 0, 2, 1)
+    let back = iprdns.parse_name4(iprdns.name4(a))
+    test.assert(back.is_ok())
+    test.assert(back.addr.eq(a))
+
+    test.case("a trailing dot is accepted")
+    test.assert(iprdns.parse_name4("1.2.0.192.in-addr.arpa.").is_ok())
+
+    test.case("the wrong suffix is refused")
+    test.assert(iprdns.parse_name4("1.2.0.192.example.com").is_ok() == false)
+
+    test.case("too few labels is refused rather than padded with zeros")
+    test.assert(iprdns.parse_name4("2.0.192.in-addr.arpa").is_ok() == false)
+
+    test.case("a label that is not an octet is refused")
+    test.assert(iprdns.parse_name4("1.2.0.300.in-addr.arpa").is_ok() == false)
+
+@test
+fn test_an_ipv6_name_parses_back_too() [io]
+    test.case("the round trip holds over thirty-two nibbles")
+    let a = ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 1)
+    let back = iprdns.parse_name6(iprdns.name6(a))
+    test.assert(back.is_ok())
+    test.assert(back.addr.eq(a))
+
+    test.case("and an abbreviated name is refused rather than padded")
+    test.assert(iprdns.parse_name6("1.ip6.arpa").is_ok() == false)
+
+@test
+fn test_a_zone_boundary_is_an_octet_boundary_and_a_slash_25_is_not_one() [io]
+    test.case("a /24 sits on one")
+    test.assert(iprdns.is_on_zone_boundary4(cidr.net4(ip.ipv4(192, 0, 2, 0), 24).net))
+
+    test.case("a /16 and a /8 do too")
+    test.assert(iprdns.is_on_zone_boundary4(cidr.net4(ip.ipv4(10, 0, 0, 0), 16).net))
+    test.assert(iprdns.is_on_zone_boundary4(cidr.net4(ip.ipv4(10, 0, 0, 0), 8).net))
+
+    test.case("a /25 does NOT — which is the fact to learn before asking a registry")
+    test.assert(iprdns.is_on_zone_boundary4(cidr.net4(ip.ipv4(192, 0, 2, 0), 25).net)
+                == false)
+
+    test.case("and neither does a /23, even though it covers two whole /24s")
+    test.assert(iprdns.is_on_zone_boundary4(cidr.net4(ip.ipv4(10, 0, 0, 0), 23).net)
+                == false)
+
+@test
+fn test_the_zones_a_prefix_covers() [io]
+    test.case("a /24 covers one zone")
+    let z = iprdns.zones_for4(cidr.net4(ip.ipv4(192, 0, 2, 0), 24).net)
+    test.assert(list.len(z) == 1)
+    for one in z
+        test.assert(one == "2.0.192.in-addr.arpa")
+
+    test.case("a /23 covers two, because it spans two /24s")
+    test.assert(list.len(iprdns.zones_for4(cidr.net4(ip.ipv4(10, 0, 0, 0), 23).net))
+                == 2)
+
+    test.case("a /16 covers ONE — the /16 zone, not the 256 delegations under it")
+    test.assert(list.len(iprdns.zones_for4(cidr.net4(ip.ipv4(10, 0, 0, 0), 16).net))
+                == 1)
+
+    test.case("and a /25 covers none of its own")
+    test.assert(list.len(iprdns.zones_for4(cidr.net4(ip.ipv4(192, 0, 2, 0), 25).net))
+                == 0)
+
+@test
+fn test_rfc_2317_is_the_trick_for_everything_below_an_octet() [io]
+    // The parent zone puts a CNAME at each address pointing into a
+    // zone named after the prefix, and delegates that.  The `/` inside
+    // a label is legal in a zone name and illegal in a host name,
+    // which is why this is its own function.
+    test.case("a /25 gets a classless zone name")
+    let z = iprdns.classless_zone4(cidr.net4(ip.ipv4(192, 0, 2, 0), 25).net)
+    test.assert(z == "0/25.2.0.192.in-addr.arpa")
+
+    test.case("and a /24 does not need one")
+    test.assert(iprdns.classless_zone4(cidr.net4(ip.ipv4(192, 0, 2, 0), 24).net) == "")
+
+@test
+fn test_ip6_arpa_delegates_every_four_bits() [io]
+    test.case("a /32 is eight nibbles and sits on a boundary")
+    let n = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32).net
+    test.assert(iprdns.is_on_zone_boundary6(n))
+    test.assert(iprdns.zone_for6(n) == "8.b.d.0.1.0.0.2.ip6.arpa")
+
+    test.case("a /48 and a /64 do too — every multiple of four does")
+    test.assert(iprdns.is_on_zone_boundary6(
+        cidr.net6(ip.ipv6(0x2001, 0x0DB8, 1, 0, 0, 0, 0, 0), 48).net))
+    test.assert(iprdns.is_on_zone_boundary6(
+        cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 64).net))
+
+    test.case("a /33 does not, and answers no zone rather than a rounded one")
+    let odd = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 33).net
+    test.assert(iprdns.is_on_zone_boundary6(odd) == false)
+    test.assert(iprdns.zone_for6(odd) == "")

@@ -1,0 +1,58 @@
+[package]
+name        = "cidr-nv"
+version     = "0.0.1"
+description = "Subnet arithmetic over ipaddr-nv's networks: subnet-of and supernet, subnets and hosts as index arithmetic rather than lists, a list of networks aggregated into its minimal cover, the IANA special-purpose registries as predicates on a network, reverse-DNS names both ways, and a prefix trie for longest-prefix match that a device firewall can run on raw integers.  Interface only — every body is a todo()."
+license     = "Apache-2.0"
+
+# An INTERFACE release: every `pub fn` body is a `todo()`, so the
+# signatures and the effect rows are published and nothing is
+# implemented.  `novo pkg publish` recognises the shape and requires
+# both the draft stability and the 0.0.x version; the first
+# implementation is the 0.1.0 published over it.
+stability   = "draft"
+
+# `core`, and it is bit arithmetic over two integers throughout.
+# Nothing here reads a file, asks a resolver a question or consults a
+# clock: a reverse-DNS name is a string this package BUILDS and dns-nv
+# is what asks about it, and the special-purpose registries are a table
+# compiled into the package rather than a file fetched from IANA.
+#
+# `tests/embedded_probe.nv` IS here, and the claim is real: a device
+# firewall table is the consumer.  See `iptrie` for the shape that
+# makes it possible — the device half speaks raw `Int`s and this
+# package's own `@value` rule structs, because on a device the four
+# bytes come out of a packet header rather than out of a string, and
+# ipaddr-nv's parsers carry `@tier(app)` for exactly that reason.
+layer       = "core"
+
+category    = "networking"
+
+tags        = ["cidr", "subnet", "ipv4", "ipv6", "prefix", "routing", "longest-prefix-match", "ipnetwork"]
+repository  = "https://github.com/novolang/cidr-nv"
+maintainers = ["novo-lang"]
+novo        = ">= 0.8.9"
+
+# A library: no `main`, so `novo pkg build` type-checks and
+# effect-checks every module under `src/` and writes no binary.
+
+[docs.pages]
+"README.md" = "Subnet arithmetic, aggregation and longest-prefix match"
+
+[dependencies]
+# One `core` dependency, and the whole design of the package is in the
+# decision to have exactly this one.
+#
+# ipaddr-nv already ships `Ipv4`, `Ipv6`, `Net4` and `Net6`, the CIDR
+# parsers and printers, `contains`, `overlaps`, the masks and the
+# host bounds.  This package does NOT redeclare any of them.  A second
+# network type on one registry would mean two incompatible `Net4`s —
+# public type names are keyed by name across the whole assembly, so a
+# consumer of both would be refused — and it would mean a breaking
+# change to a published, implemented package for no benefit to anyone.
+#
+# So the row in the plan, "the split if subnet arithmetic outgrows that
+# module", is read as: the ARITHMETIC outgrew it, the TYPES did not.
+# Everything here takes and answers ipaddr-nv's values, and a consumer
+# adds this package only when they need the arithmetic ipaddr-nv does
+# not do.
+ipaddr-nv = "^0.1.1"

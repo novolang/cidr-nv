@@ -1,0 +1,152 @@
+// ipreg_tests.nv — the registries, and the difference between a
+// question about a network and a question about an address.
+//
+// RED ON PURPOSE: every body under `src/` is a `todo()`, so every
+// assertion here reaches `not implemented: cidr-nv.<module>.<fn>`.
+// That is the expected result until the bodies land.
+//
+// EVERY PREDICATE IS ASSERTED TWICE: once on a prefix that is entirely
+// inside the block, and once on one that is half in and half out.  The
+// second assertion is the whole reason this module exists, because an
+// `is_private` that answered on the network's first address would pass
+// the first and fail the second, and a firewall built on it would let
+// through half a /7.
+
+use std.test
+use std.list
+use ip
+use cidr
+use ipreg
+
+@test
+fn test_the_registries_are_a_table_a_caller_can_read() [io]
+    test.case("both families have rows")
+    test.assert(list.len(ipreg.entries4()) > 0)
+    test.assert(list.len(ipreg.entries6()) > 0)
+
+    test.case("and every row names its prefix, its purpose and its RFC")
+    for e in ipreg.entries4()
+        test.assert(e.prefix != "")
+        test.assert(e.name != "")
+        test.assert(e.source_rfc != "")
+
+    test.case("the snapshot says how old it is, because a table goes stale silently")
+    test.assert(ipreg.registry_date() != "")
+
+@test
+fn test_the_five_flags_are_separate_because_no_label_describes_them_together() [io]
+    // 100.64.0.0/10 is forwardable and not globally reachable, which
+    // is exactly what a carrier-grade NAT needs and what a single
+    // "is it special" label cannot say.
+    let cgnat = cidr.net4(ip.ipv4(100, 64, 0, 0), 10).net
+
+    test.case("it is shared address space")
+    test.assert(ipreg.is_shared4(cgnat))
+
+    test.case("it is not globally reachable")
+    test.assert(ipreg.is_global4(cgnat) == false)
+
+    test.case("and it is not RFC 1918 private either — it is its own thing")
+    test.assert(ipreg.is_private4(cgnat) == false)
+
+    test.case("the row is found by the prefix that touches it")
+    test.assert(list.len(ipreg.rows_touching4(cgnat)) > 0)
+
+@test
+fn test_a_network_predicate_is_about_every_address_in_it() [io]
+    test.case("10.0.0.0/8 is entirely private")
+    let eight = cidr.net4(ip.ipv4(10, 0, 0, 0), 8).net
+    test.assert(ipreg.is_private4(eight))
+    test.assert(ipreg.partly_private4(eight))
+
+    test.case("10.0.0.0/7 is HALF private, and the two answers differ")
+    // The other half is 11.0.0.0/8, which is public address space.
+    let seven = cidr.net4(ip.ipv4(10, 0, 0, 0), 7).net
+    test.assert(ipreg.is_private4(seven) == false)
+    test.assert(ipreg.partly_private4(seven))
+
+    test.case("and a network with nothing private in it answers false to both")
+    let public = cidr.net4(ip.ipv4(8, 8, 8, 0), 24).net
+    test.assert(ipreg.is_private4(public) == false)
+    test.assert(ipreg.partly_private4(public) == false)
+
+@test
+fn test_the_named_ipv4_blocks() [io]
+    test.case("loopback")
+    test.assert(ipreg.is_loopback4(cidr.net4(ip.ipv4(127, 0, 0, 0), 8).net))
+    test.assert(ipreg.is_loopback4(cidr.net4(ip.ipv4(126, 0, 0, 0), 7).net) == false)
+
+    test.case("link-local")
+    test.assert(ipreg.is_link_local4(cidr.net4(ip.ipv4(169, 254, 0, 0), 16).net))
+    test.assert(ipreg.is_link_local4(cidr.net4(ip.ipv4(169, 254, 0, 0), 15).net)
+                == false)
+
+    test.case("multicast")
+    test.assert(ipreg.is_multicast4(cidr.net4(ip.ipv4(224, 0, 0, 0), 4).net))
+    test.assert(ipreg.is_multicast4(cidr.net4(ip.ipv4(224, 0, 0, 0), 3).net) == false)
+
+@test
+fn test_documentation_is_three_blocks_and_not_one() [io]
+    // 192.0.2.0/24, 198.51.100.0/24 and 203.0.113.0/24 — which is why
+    // a caller cannot answer this with a single contains().
+    test.case("TEST-NET-1")
+    test.assert(ipreg.is_documentation4(cidr.net4(ip.ipv4(192, 0, 2, 0), 24).net))
+
+    test.case("TEST-NET-2")
+    test.assert(ipreg.is_documentation4(cidr.net4(ip.ipv4(198, 51, 100, 0), 24).net))
+
+    test.case("TEST-NET-3")
+    test.assert(ipreg.is_documentation4(cidr.net4(ip.ipv4(203, 0, 113, 0), 24).net))
+
+    test.case("and an ordinary address in between is none of them")
+    test.assert(ipreg.is_documentation4(cidr.net4(ip.ipv4(192, 0, 3, 0), 24).net)
+                == false)
+
+@test
+fn test_the_bogon_list_is_what_a_route_filter_is() [io]
+    test.case("documentation space is a bogon")
+    test.assert(ipreg.is_bogon4(cidr.net4(ip.ipv4(192, 0, 2, 0), 24).net))
+
+    test.case("and public space is not")
+    test.assert(ipreg.is_bogon4(cidr.net4(ip.ipv4(8, 8, 8, 0), 24).net) == false)
+    test.assert(ipreg.is_global4(cidr.net4(ip.ipv4(8, 8, 8, 0), 24).net))
+
+    test.case("the whole list is published, aggregated, rather than copied by hand")
+    let list4 = ipreg.bogons4()
+    test.assert(list.len(list4) > 0)
+
+    test.case("and every entry in it is itself a bogon, which is the check")
+    for b in list4
+        test.assert(ipreg.is_bogon4(b))
+
+@test
+fn test_the_named_ipv6_blocks() [io]
+    test.case("unique local")
+    test.assert(ipreg.is_unique_local6(cidr.net6(ip.ipv6(0xFC00, 0, 0, 0, 0, 0, 0, 0),
+                                                 7).net))
+
+    test.case("link-local")
+    test.assert(ipreg.is_link_local6(cidr.net6(ip.ipv6(0xFE80, 0, 0, 0, 0, 0, 0, 0),
+                                               10).net))
+    test.assert(ipreg.is_link_local6(cidr.net6(ip.ipv6(0xFE80, 0, 0, 0, 0, 0, 0, 0),
+                                               9).net) == false)
+
+    test.case("multicast")
+    test.assert(ipreg.is_multicast6(cidr.net6(ip.ipv6(0xFF00, 0, 0, 0, 0, 0, 0, 0),
+                                              8).net))
+
+    test.case("documentation")
+    let doc = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32).net
+    test.assert(ipreg.is_documentation6(doc))
+    test.assert(ipreg.is_bogon6(doc))
+    test.assert(ipreg.is_global6(doc) == false)
+
+    test.case("global unicast is global")
+    test.assert(ipreg.is_global6(cidr.net6(ip.ipv6(0x2600, 0, 0, 0, 0, 0, 0, 0),
+                                           32).net))
+
+    test.case("the IPv6 bogon list is published too")
+    test.assert(list.len(ipreg.bogons6()) > 0)
+
+    test.case("and the rows that touch a prefix are found the same way")
+    test.assert(list.len(ipreg.rows_touching6(doc)) > 0)

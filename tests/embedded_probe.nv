@@ -1,0 +1,155 @@
+// embedded_probe.nv — the half of this package that runs on a
+// microcontroller, built as firmware and run under QEMU.
+//
+// This is not a test; the audit's `core-embedded` row cross-compiles
+// it for `--target=nrf52-qemu`.  What it proves is the thing a host
+// test cannot: that the rule type and the two match predicates LINK on
+// a Cortex-M — no allocator, no `novo_bytes_*`, and the 64-bit shifts
+// and masks of an IPv6 prefix lowered onto a 32-bit core through
+// whatever EABI helpers that takes.
+//
+// THE CONSUMER IS A DEVICE FIREWALL TABLE, and the loop below is the
+// loop that firmware writes: a fixed array of rules in `.rodata`, an
+// address out of a packet header as four octets, and a scan that keeps
+// the longest match.  It is written here so the claim is a build
+// rather than a sentence.
+//
+// WHAT IS NOT HERE, AND WHY
+//
+// Everything that names `Net4`, `Net6`, `Ipv4` or `Ipv6`.  Those are
+// ipaddr-nv's types, and the audit builds this probe against this
+// package's own modules only, so naming one is a claim that cannot be
+// checked.  That constraint and the device's own shape point the same
+// way: a firmware holds four octets out of a header rather than a
+// parsed address, because ipaddr-nv's parsers carry `@tier(app)` and a
+// device build prunes them.  The host converts, the device scans.
+//
+// Also not here: `ipagg`, `ipreg`, `iprdns` and `iptrie`'s trie.  Each
+// of those either builds a list or reads a string.
+
+use std.str
+use iptrie
+
+// A rule table of the size a firmware firewall has.  Built in the
+// function rather than held as a constant because a `@value` struct in
+// a module-level array is a shape this probe is not testing.
+@tier(rt)
+fn deny_all() -> CidrRule4
+    iptrie.rule4(0, 0, 0)
+
+// Every answer this probe checks, folded into one number so a single
+// comparison decides the run.  A firmware image has one line of
+// output; making it depend on all of them is what stops a passing run
+// from meaning "the first assertion held".
+@tier(rt)
+fn score() -> Int
+    var n = 0
+
+    // The mask arithmetic every other call is written in terms of.
+    if iptrie.mask4(24) == 0xFFFFFF00
+        n = n + 1
+    if iptrie.mask4(0) == 0
+        n = n + 1
+    if iptrie.mask4(32) == 0xFFFFFFFF
+        n = n + 1
+
+    // A netmask back to a prefix length — what a device configured
+    // with 255.255.255.0 needs.
+    if iptrie.prefix_of_mask4(0xFFFFFF00) == 24
+        n = n + 1
+    if iptrie.prefix_of_mask4(0xFF00FF00) == 0 - 1
+        n = n + 1
+
+    // The constructor masks, so a rule written with host bits set is
+    // the rule the author meant rather than one that matches nothing.
+    let r = iptrie.rule4(0xC0000205, 24, 7)
+    if r.base == 0xC0000200
+        n = n + 1
+    if r.prefix == 24 and r.tag == 7
+        n = n + 1
+    if iptrie.rule_is_normal4(r)
+        n = n + 1
+
+    // Containment: one shift, one mask, one comparison.
+    if iptrie.rule_holds4(r, 0xC0000205)
+        n = n + 1
+    if not iptrie.rule_holds4(r, 0xC0000305)
+        n = n + 1
+    if iptrie.rule_holds4(deny_all(), 0x08080808)
+        n = n + 1
+
+    // Longest-prefix-wins, and an equal prefix keeps the earlier rule.
+    let wide = iptrie.rule4(0xC0000000, 8, 1)
+    if iptrie.rule_beats4(r, wide)
+        n = n + 1
+    if not iptrie.rule_beats4(wide, r)
+        n = n + 1
+    if not iptrie.rule_beats4(r, r)
+        n = n + 1
+
+    // The unused slot matches nothing and never wins.
+    let empty = iptrie.rule_none4()
+    if iptrie.rule_is_none4(empty)
+        n = n + 1
+    if not iptrie.rule_holds4(empty, 0xC0000205)
+        n = n + 1
+    if not iptrie.rule_beats4(empty, wide)
+        n = n + 1
+
+    // The loop a firmware firewall actually writes, over a table
+    // built in registers rather than allocated.
+    var best = iptrie.rule_none4()
+    let probe = 0xC0000205
+    if iptrie.rule_holds4(wide, probe) and iptrie.rule_beats4(wide, best)
+        best = wide
+    if iptrie.rule_holds4(r, probe) and iptrie.rule_beats4(r, best)
+        best = r
+    if best.tag == 7
+        n = n + 1
+
+    // An address the table does not cover falls through to nothing.
+    var miss = iptrie.rule_none4()
+    let other = 0x08080808
+    if iptrie.rule_holds4(r, other) and iptrie.rule_beats4(r, miss)
+        miss = r
+    if iptrie.rule_is_none4(miss)
+        n = n + 1
+
+    // The IPv6 halves: 64-bit shifts and masks on a 32-bit core.
+    let six = iptrie.rule6(0x20010DB800000001, 0x0000000000000001, 32, 9)
+    if six.lo == 0
+        n = n + 1
+    if iptrie.rule_holds6(six, 0x20010DB899999999, 0x1234567812345678)
+        n = n + 1
+    if not iptrie.rule_holds6(six, 0x20010DB900000000, 0)
+        n = n + 1
+    let six_narrow = iptrie.rule6(0x20010DB800000000, 0, 48, 10)
+    if iptrie.rule_beats6(six_narrow, six)
+        n = n + 1
+    if iptrie.rule_is_none6(iptrie.rule_none6())
+        n = n + 1
+    if not iptrie.rule_holds6(iptrie.rule_none6(), 0, 0)
+        n = n + 1
+
+    // The size a firmware author sizes the table with.
+    if iptrie.rule_table_bytes4(32) > 0
+        n = n + 1
+
+    n
+
+@tier(rt)
+fn main() [hw, time]
+    bsp.board.init()
+    // 25 is the number of checks in `score`.  The count is printed on
+    // a failure rather than only compared, so a device that disagrees
+    // with the host says HOW MANY it lost and a bisect has somewhere
+    // to start.
+    let n = score()
+    if n == 25
+        hal.uart.write("PASS: cidr-embedded\n")
+    else
+        hal.uart.write("FAIL: cidr-embedded score=")
+        hal.uart.write(str.from_int(n))
+        hal.uart.write("\n")
+    loop
+        core.rt.sleep_ms(1000)

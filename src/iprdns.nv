@@ -1,0 +1,238 @@
+// iprdns.nv — the names in `in-addr.arpa` and `ip6.arpa`, both
+// directions, and the delegation boundary a prefix sits on.
+//
+// Every body here is a `todo()`; the signatures are the design.
+//
+// THIS PACKAGE BUILDS THE NAME AND ASKS NOBODY.  A reverse-DNS name is
+// a string, and turning an address into one is arithmetic; sending a
+// query is a `host` package's job and dns-nv is where it belongs.
+// Keeping the two apart is what lets a zone-file generator use this
+// with no resolver in the room, and what lets this be `core`.
+//
+// THE ZONE QUESTION IS THE INTERESTING ONE.  Anyone can reverse four
+// octets.  What people get wrong is which zone a PREFIX belongs to:
+// `in-addr.arpa` delegates on octet boundaries only, so a `/24` has
+// exactly one zone and a `/23` has two and a `/25` has none of its own
+// — it is a fragment of its parent's, served by the RFC 2317 `CNAME`
+// trick or not served at all.  `zones_for4` answers that, and
+// `is_on_zone_boundary4` is the check a caller makes before assuming
+// they can be delegated a zone.
+//
+// IPv6 IS EASIER AND LOOKS HARDER: `ip6.arpa` delegates on NIBBLE
+// boundaries, so every prefix that is a multiple of four has its own
+// zone and no other prefix does.
+
+use ip
+use cidr
+
+// The reverse-DNS name of an address: `1.2.0.192.in-addr.arpa` for
+// `192.0.2.1`.
+//
+// No trailing dot.  A caller writing a zone file wants one and a
+// caller building a query does not, so `absolute` is the function that
+// adds it rather than a flag on this one.
+//
+// ```novo
+// use ip
+// use iprdns
+//
+// fn main() [io]
+//     println(iprdns.name4(ip.ipv4(192, 0, 2, 1)))
+// ```
+pub fn name4(a: Ipv4) -> Str []
+    todo("cidr-nv.iprdns.name4")
+
+// The reverse-DNS name of an IPv6 address: thirty-two nibbles, least
+// significant first, then `ip6.arpa`.
+//
+// Always thirty-two, never abbreviated — `::1` is
+// `1.0.0.…0.ip6.arpa`, seventy-two characters of it — because the
+// zone is defined over the full form and an abbreviated name resolves
+// to nothing.
+//
+// ```novo
+// use ip
+// use iprdns
+//
+// fn main() [io]
+//     println(iprdns.name6(ip.ipv6(0, 0, 0, 0, 0, 0, 0, 1)))
+// ```
+pub fn name6(a: Ipv6) -> Str []
+    todo("cidr-nv.iprdns.name6")
+
+// `name` with a trailing dot, which is what a zone file needs and a
+// query does not.
+//
+// ```novo
+// use ip
+// use iprdns
+//
+// fn main() [io]
+//     println(iprdns.absolute(iprdns.name4(ip.ipv4(192, 0, 2, 1))))
+// ```
+pub fn absolute(name: Str) -> Str []
+    todo("cidr-nv.iprdns.absolute")
+
+// The address a reverse-DNS name names, or the reason it names none.
+//
+// Accepts a trailing dot and either case; refuses a name with the
+// wrong number of labels, a label that is not an octet, or a suffix
+// that is not `in-addr.arpa`.
+//
+// ```novo
+// use iprdns
+//
+// fn main() [io]
+//     let r = iprdns.parse_name4("1.2.0.192.in-addr.arpa")
+//     println("${r.is_ok()}")
+// ```
+pub fn parse_name4(name: Str) -> Ipv4Parse []
+    todo("cidr-nv.iprdns.parse_name4")
+
+// The IPv6 address a reverse-DNS name names, or the reason it names
+// none.
+//
+// ```novo
+// use iprdns
+//
+// fn main() [io]
+//     println("${iprdns.parse_name6("bad").is_ok()}")
+// ```
+pub fn parse_name6(name: Str) -> Ipv6Parse []
+    todo("cidr-nv.iprdns.parse_name6")
+
+// ── zones ────────────────────────────────────────────────────────────
+
+// True when `n`'s prefix length is a multiple of eight, so the network
+// has a reverse zone of its own that can be delegated.
+//
+// A `/25` answers false, and that is the fact a caller asking their
+// registry for reverse delegation needs before they ask.
+//
+// ```novo
+// use ip
+// use cidr
+// use iprdns
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(192, 0, 2, 0), 25)
+//     println("${iprdns.is_on_zone_boundary4(n.net)}")
+// ```
+pub fn is_on_zone_boundary4(n: Net4) -> Bool []
+    todo("cidr-nv.iprdns.is_on_zone_boundary4")
+
+// The reverse zones `n` covers: one per `/8`, `/16` or `/24` inside it.
+//
+// A `/24` answers one zone; a `/23` answers two; a `/16` answers one,
+// because the `/16` zone covers the whole of it and the 256 `/24`
+// zones under it are somebody else's delegations rather than this
+// network's.  A prefix that is not on a boundary answers the empty
+// list, and `is_on_zone_boundary4` is how a caller tells that apart
+// from a mistake.
+//
+// ```novo
+// use std.list
+// use ip
+// use cidr
+// use iprdns
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(192, 0, 2, 0), 23)
+//     println("${list.len(iprdns.zones_for4(n.net))}")
+// ```
+pub fn zones_for4(n: Net4) -> [Str] []
+    todo("cidr-nv.iprdns.zones_for4")
+
+// True when `n`'s prefix length is a multiple of four, so it has an
+// `ip6.arpa` zone of its own.
+//
+// ```novo
+// use ip
+// use cidr
+// use iprdns
+//
+// fn main() [io]
+//     let n = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32)
+//     println("${iprdns.is_on_zone_boundary6(n.net)}")
+// ```
+pub fn is_on_zone_boundary6(n: Net6) -> Bool []
+    todo("cidr-nv.iprdns.is_on_zone_boundary6")
+
+// The `ip6.arpa` zone `n` belongs to, or the empty string when its
+// prefix is not a multiple of four.
+//
+// One zone rather than a list, because `ip6.arpa` delegates every four
+// bits and a prefix on a boundary has exactly one.
+//
+// ```novo
+// use ip
+// use cidr
+// use iprdns
+//
+// fn main() [io]
+//     let n = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32)
+//     println(iprdns.zone_for6(n.net))
+// ```
+pub fn zone_for6(n: Net6) -> Str []
+    todo("cidr-nv.iprdns.zone_for6")
+
+// The RFC 2317 zone name for a prefix shorter than a `/24` — the
+// classless delegation `0/25.2.0.192.in-addr.arpa`.
+//
+// The trick that exists because `in-addr.arpa` cannot delegate below
+// an octet: the parent zone puts a `CNAME` at each address pointing
+// into a zone named after the prefix, and delegates that.  The `/`
+// inside a label is legal in a zone name and illegal in a host name,
+// which is why this is a separate function with its own doc comment
+// rather than something `zones_for4` quietly returns.
+//
+// An empty string for a prefix of 24 or shorter, which needs no trick.
+//
+// ```novo
+// use ip
+// use cidr
+// use iprdns
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(192, 0, 2, 0), 25)
+//     println(iprdns.classless_zone4(n.net))
+// ```
+pub fn classless_zone4(n: Net4) -> Str []
+    todo("cidr-nv.iprdns.classless_zone4")
+
+// How many characters `name6` will produce for any address: always
+// the same number.
+//
+// Published so a caller sizing a buffer does not have to count
+// nibbles, and because the constancy is the surprising part.
+//
+// ```novo
+// use iprdns
+//
+// fn main() [io]
+//     println("${iprdns.name6_len()}")
+// ```
+pub fn name6_len() -> Int []
+    todo("cidr-nv.iprdns.name6_len")
+
+// The suffix every IPv4 reverse name ends with: `in-addr.arpa`.
+//
+// ```novo
+// use iprdns
+//
+// fn main() [io]
+//     println(iprdns.suffix4())
+// ```
+pub fn suffix4() -> Str []
+    todo("cidr-nv.iprdns.suffix4")
+
+// The suffix every IPv6 reverse name ends with: `ip6.arpa`.
+//
+// ```novo
+// use iprdns
+//
+// fn main() [io]
+//     println(iprdns.suffix6())
+// ```
+pub fn suffix6() -> Str []
+    todo("cidr-nv.iprdns.suffix6")

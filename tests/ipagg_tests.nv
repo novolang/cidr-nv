@@ -1,0 +1,235 @@
+// ipagg_tests.nv — the minimal cover, and the one function that is
+// allowed to round up.
+//
+// RED ON PURPOSE: every body under `src/` is a `todo()`, so every
+// assertion here reaches `not implemented: cidr-nv.<module>.<fn>`.
+// That is the expected result until the bodies land.
+//
+// THE ASSERTIONS ARE ABOUT WHAT IS NOT COVERED, on purpose.  An
+// aggregation that produces too FEW networks is obvious — an address
+// stops matching and somebody notices within the hour.  One that
+// produces too MANY addresses is invisible: the rule still works, and
+// it also lets through a block nobody listed.  So every case below
+// that could round up asserts the address that must NOT be covered.
+
+use std.test
+use std.list
+use ip
+use cidr
+use ipnet
+use ipagg
+
+@test
+fn test_a_range_is_ordered_however_the_caller_wrote_it() [io]
+    test.case("backwards in, forwards out")
+    let r = ipagg.range4(ip.ipv4(10, 0, 0, 9), ip.ipv4(10, 0, 0, 5))
+    test.assert(r.is_ok())
+    test.assert(r.range.first.octet(3) == 5)
+    test.assert(r.range.last.octet(3) == 9)
+
+    test.case("a single address is a range of one")
+    let one = ipagg.range4(ip.ipv4(10, 0, 0, 5), ip.ipv4(10, 0, 0, 5))
+    test.assert(one.range.first.octet(3) == one.range.last.octet(3))
+
+@test
+fn test_a_network_becomes_the_range_it_covers_and_back() [io]
+    let n = cidr.net4(ip.ipv4(192, 0, 2, 0), 24).net
+    let r = ipagg.net_to_range4(n)
+
+    test.case("first is the network address, last is the broadcast address")
+    test.assert(r.first.octet(3) == 0)
+    test.assert(r.last.octet(3) == 255)
+
+    test.case("and a network round-trips to itself as one network")
+    let back = ipagg.range_to_nets4(r)
+    test.assert(list.len(back) == 1)
+    for b in back
+        test.assert(ipnet.eq4(b, n))
+
+@test
+fn test_an_arbitrary_range_covers_exactly_and_no_more() [io]
+    // 10.0.0.5 to 10.0.0.9 is five addresses, and no single prefix
+    // holds exactly those.  The cover is /32 + /31 + /31.
+    let r = ipagg.range4(ip.ipv4(10, 0, 0, 5), ip.ipv4(10, 0, 0, 9))
+    let nets = ipagg.range_to_nets4(r.range)
+
+    test.case("three networks, and the shortest possible set")
+    test.assert(list.len(nets) == 3)
+
+    test.case("every address in the range is covered")
+    for a in [5, 6, 7, 8, 9]
+        var found = false
+        for n in nets
+            if n.contains(ip.ipv4(10, 0, 0, a))
+                found = true
+        test.assert(found)
+
+    test.case("and 10.0.0.4 and 10.0.0.10 are NOT — that is the whole contract")
+    for a in [4, 10]
+        for n in nets
+            test.assert(n.contains(ip.ipv4(10, 0, 0, a)) == false)
+
+@test
+fn test_siblings_collapse_and_neighbours_that_are_not_siblings_do_not() [io]
+    test.case("two /25s that are halves of a /24 become the /24")
+    let low = cidr.net4(ip.ipv4(10, 0, 0, 0), 25).net
+    let high = cidr.net4(ip.ipv4(10, 0, 0, 128), 25).net
+    let merged = ipagg.aggregate4([low, high])
+    test.assert(list.len(merged) == 1)
+    for m in merged
+        test.assert(m.prefix == 24)
+
+    test.case("two /24s that are halves of a /23 become the /23")
+    let a = cidr.net4(ip.ipv4(10, 0, 0, 0), 24).net
+    let b = cidr.net4(ip.ipv4(10, 0, 1, 0), 24).net
+    test.assert(list.len(ipagg.aggregate4([a, b])) == 1)
+
+    test.case("but 10.0.0.0/24 and 10.0.2.0/24 stay two, because the parent")
+    test.case("would also hold 10.0.1.0/24 and nobody listed that")
+    let c = cidr.net4(ip.ipv4(10, 0, 2, 0), 24).net
+    let kept = ipagg.aggregate4([a, c])
+    test.assert(list.len(kept) == 2)
+    for k in kept
+        test.assert(k.contains(ip.ipv4(10, 0, 1, 1)) == false)
+
+@test
+fn test_a_network_inside_another_is_dropped_rather_than_kept_twice() [io]
+    let big = cidr.net4(ip.ipv4(10, 0, 0, 0), 8).net
+    let small = cidr.net4(ip.ipv4(10, 1, 2, 0), 24).net
+
+    test.case("one network, and it is the bigger one")
+    let out = ipagg.aggregate4([small, big])
+    test.assert(list.len(out) == 1)
+    for o in out
+        test.assert(o.prefix == 8)
+
+    test.case("and the result is sorted whatever order the input was in")
+    test.assert(list.len(ipagg.aggregate4([big, small])) == 1)
+
+    test.case("an empty input aggregates to nothing rather than to a default route")
+    test.assert(list.len(ipagg.aggregate4([])) == 0)
+
+@test
+fn test_enclosing_rounds_up_and_that_is_the_whole_difference() [io]
+    let a = cidr.net4(ip.ipv4(10, 0, 0, 0), 24).net
+    let c = cidr.net4(ip.ipv4(10, 0, 2, 0), 24).net
+
+    test.case("aggregate keeps two, because the parent holds more than was listed")
+    test.assert(list.len(ipagg.aggregate4([a, c])) == 2)
+
+    test.case("enclosing answers one prefix that holds both")
+    let one = ipagg.enclosing4([a, c])
+    test.assert(one.is_ok())
+    test.assert(one.net.prefix == 22)
+
+    test.case("and it DOES hold 10.0.1.0/24, which nobody listed")
+    test.assert(one.net.contains(ip.ipv4(10, 0, 1, 1)))
+
+    test.case("an empty list encloses nothing, rather than 0.0.0.0/0")
+    test.assert(ipagg.enclosing4([]).is_ok() == false)
+
+@test
+fn test_a_hole_is_cut_without_covering_it() [io]
+    let big = cidr.net4(ip.ipv4(10, 0, 0, 0), 8).net
+    let hole = cidr.net4(ip.ipv4(10, 1, 2, 0), 24).net
+
+    test.case("the result is a handful of networks, not one")
+    let rest = ipagg.exclude4(big, hole)
+    test.assert(list.len(rest) > 1)
+
+    test.case("nothing in the result holds an address from the hole")
+    for n in rest
+        test.assert(n.contains(ip.ipv4(10, 1, 2, 3)) == false)
+
+    test.case("and everything else in the /8 is still covered")
+    var found = false
+    for n in rest
+        if n.contains(ip.ipv4(10, 1, 3, 3))
+            found = true
+    test.assert(found)
+
+    test.case("a hole outside the network is a refusal, not an empty answer")
+    let elsewhere = cidr.net4(ip.ipv4(192, 0, 2, 0), 24).net
+    test.assert(ipagg.exclude4_is_valid(big, elsewhere) == false)
+
+    test.case("and a hole that IS the network covers nothing, validly")
+    test.assert(ipagg.exclude4_is_valid(big, big))
+    test.assert(list.len(ipagg.exclude4(big, big)) == 0)
+
+@test
+fn test_the_set_algebra_is_what_an_allow_list_minus_a_deny_list_is() [io]
+    let allow = [cidr.net4(ip.ipv4(10, 0, 0, 0), 8).net]
+    let deny = [cidr.net4(ip.ipv4(10, 1, 2, 0), 24).net]
+
+    test.case("difference cuts every hole out of every network")
+    let left = ipagg.difference4(allow, deny)
+    for n in left
+        test.assert(n.contains(ip.ipv4(10, 1, 2, 3)) == false)
+
+    test.case("intersection keeps only what both hold")
+    let both = ipagg.intersection4(allow, deny)
+    test.assert(list.len(both) == 1)
+
+    test.case("and an empty side makes an empty intersection")
+    test.assert(list.len(ipagg.intersection4(allow, [])) == 0)
+
+@test
+fn test_coverage_is_not_a_loop_over_subnet_of() [io]
+    // A network can be covered by two of the list between them without
+    // being inside either, which is the case a fold over subnet_of
+    // answers wrongly.
+    let want = [cidr.net4(ip.ipv4(10, 0, 0, 0), 23).net]
+    let have = [cidr.net4(ip.ipv4(10, 0, 0, 0), 24).net,
+                cidr.net4(ip.ipv4(10, 0, 1, 0), 24).net]
+
+    test.case("two halves cover the whole, even though neither contains it")
+    test.assert(ipnet.subnet_of4(cidr.net4(ip.ipv4(10, 0, 0, 0), 23).net,
+                                 cidr.net4(ip.ipv4(10, 0, 0, 0), 24).net) == false)
+    test.assert(ipagg.covered_by4(want, have))
+
+    test.case("one half does not")
+    test.assert(ipagg.covered_by4(want, [cidr.net4(ip.ipv4(10, 0, 0, 0), 24).net])
+                == false)
+
+    test.case("and nothing is covered by nothing, vacuously")
+    test.assert(ipagg.covered_by4([], []))
+
+@test
+fn test_totals_are_counted_after_aggregation_not_before() [io]
+    let a = cidr.net4(ip.ipv4(10, 0, 0, 0), 24).net
+
+    test.case("the same network listed twice is counted once")
+    test.assert(ipagg.total_addresses4([a, a]) == 256)
+
+    test.case("and a network inside another is not added on top of it")
+    let big = cidr.net4(ip.ipv4(10, 0, 0, 0), 8).net
+    test.assert(ipagg.total_addresses4([big, a]) == 16777216)
+
+@test
+fn test_the_ipv6_half_aggregates_the_same_way() [io]
+    let low = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 33).net
+    let high = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0x8000, 0, 0, 0, 0, 0), 33).net
+
+    test.case("two halves collapse into the /32")
+    let merged = ipagg.aggregate6([low, high])
+    test.assert(list.len(merged) == 1)
+    for m in merged
+        test.assert(m.prefix == 32)
+
+    test.case("a range becomes a bounded list of prefixes")
+    let a = ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 1)
+    let b = ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 9)
+    let r = ipagg.range6(a, b)
+    test.assert(list.len(ipagg.range_to_nets6(r.range)) > 0)
+
+    test.case("net_to_range6 is its inverse for a whole network")
+    let n = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32).net
+    test.assert(ipagg.net_to_range6(n).first.group(1) == 0x0DB8)
+
+    test.case("and the rest of the algebra follows")
+    test.assert(ipagg.covered_by6([low], [n]))
+    test.assert(ipagg.enclosing6([low, high]).net.prefix == 32)
+    test.assert(list.len(ipagg.intersection6([n], [low])) == 1)
+    test.assert(ipagg.exclude6_is_valid(n, low))
+    test.assert(list.len(ipagg.difference6([n], [low])) > 0)
+    test.assert(list.len(ipagg.exclude6(n, low)) > 0)

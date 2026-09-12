@@ -1,0 +1,400 @@
+// ipreg.nv — the IANA special-purpose address registries, as a table
+// and as predicates on a NETWORK.
+//
+// Every body here is a `todo()`; the signatures are the design.
+//
+// WHY THIS EXISTS WHEN ipaddr-nv ALREADY CLASSIFIES.  ipaddr-nv asks
+// its questions of an ADDRESS: `is_private`, `is_loopback`,
+// `is_documentation`.  A firewall, a route filter and a bogon list ask
+// them of a PREFIX, and the two are not the same question.  `10.0.0.0/7`
+// is not a private network — it is half private and half public — and
+// an `is_private` that took a network and answered on its first
+// address would say yes.  So every predicate here answers about EVERY
+// address in the network, `partly_*` answers about any of them, and
+// the difference between those two is the bug this module exists to
+// make impossible.
+//
+// THE TABLE IS A VALUE, NOT A FILE.  The registries are about eighty
+// rows between the two families and they change perhaps once a year;
+// `entries4()` and `entries6()` hand them over as data so a caller can
+// print them, filter them, or check their own list against them.  A
+// `core` package cannot fetch anything and should not want to: a table
+// downloaded at run time is a table whose contents differ between two
+// runs of the same firewall.
+//
+// EACH ROW CARRIES THE FIVE FLAGS THE REGISTRY DEFINES, and they are
+// separate fields rather than one enum, because a reader asking "may I
+// forward this" and a reader asking "may I put this in a routing
+// protocol" are asking about different columns, and the registry
+// answers them differently for several rows — 100.64.0.0/10 is
+// forwardable and not globally reachable, which is exactly the
+// combination a carrier-grade NAT needs and no single label describes.
+
+use ip
+use cidr
+
+// One row of an IANA special-purpose address registry.
+pub struct CidrSpecial
+    // The prefix the row is about, written as ipaddr-nv would print
+    // it — `100.64.0.0/10`.  A string rather than a `Net4` because
+    // this struct describes both families and a `@value` network
+    // cannot be an enum payload.
+    prefix: Str
+    // The registry's own name for it — `Shared Address Space`,
+    // `Documentation (TEST-NET-1)`, `Benchmarking`.
+    name: Str
+    // The document that assigned it — `RFC 6598`.
+    source_rfc: Str
+    // True when a node may use an address from this block as a source
+    // or destination of its own traffic.
+    is_source: Bool
+    // True when a router may forward a packet with such a destination
+    // beyond the local network.
+    is_forwardable: Bool
+    // True when the block is reachable from the public Internet.
+    is_global: Bool
+    // True when a routing protocol may carry the prefix.
+    is_routable: Bool
+    // True when the block is reserved for a future protocol rather
+    // than assigned to a purpose.
+    is_reserved: Bool
+
+// Every IPv4 special-purpose row, in the registry's own order.
+//
+// ```novo
+// use std.list
+// use ipreg
+//
+// fn main() [io]
+//     println("${list.len(ipreg.entries4())}")
+// ```
+pub fn entries4() -> [CidrSpecial] []
+    todo("cidr-nv.ipreg.entries4")
+
+// Every IPv6 special-purpose row, in the registry's own order.
+//
+// ```novo
+// use std.list
+// use ipreg
+//
+// fn main() [io]
+//     println("${list.len(ipreg.entries6())}")
+// ```
+pub fn entries6() -> [CidrSpecial] []
+    todo("cidr-nv.ipreg.entries6")
+
+// The registry rows that overlap `n` at all, in the registry's order.
+//
+// The answer a route filter wants: a prefix that touches any
+// special-purpose block is a prefix somebody should look at, whether
+// or not it is entirely inside one.
+//
+// ```novo
+// use std.list
+// use ip
+// use cidr
+// use ipreg
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(10, 0, 0, 0), 8)
+//     println("${list.len(ipreg.rows_touching4(n.net))}")
+// ```
+pub fn rows_touching4(n: Net4) -> [CidrSpecial] []
+    todo("cidr-nv.ipreg.rows_touching4")
+
+// The IPv6 registry rows that overlap `n` at all.
+//
+// ```novo
+// use std.list
+// use ip
+// use cidr
+// use ipreg
+//
+// fn main() [io]
+//     let n = cidr.net6(ip.ipv6(0xFC00, 0, 0, 0, 0, 0, 0, 0), 7)
+//     println("${list.len(ipreg.rows_touching6(n.net))}")
+// ```
+pub fn rows_touching6(n: Net6) -> [CidrSpecial] []
+    todo("cidr-nv.ipreg.rows_touching6")
+
+// ── the predicates, about EVERY address in the network ───────────────
+
+// True when every address in `n` is in RFC 1918 private space.
+//
+// `10.0.0.0/8` is; `10.0.0.0/7` is not, because half of it is
+// `11.0.0.0/8`, which is public.  That distinction is why this module
+// exists.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipreg
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(10, 0, 0, 0), 8)
+//     println("${ipreg.is_private4(n.net)}")
+// ```
+pub fn is_private4(n: Net4) -> Bool []
+    todo("cidr-nv.ipreg.is_private4")
+
+// True when at least one address in `n` is in private space.
+//
+// The pair `is_private4` and `partly_private4` disagreeing is exactly
+// what a person auditing a rule wants to be shown.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipreg
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(10, 0, 0, 0), 7)
+//     println("${ipreg.partly_private4(n.net)}")
+// ```
+pub fn partly_private4(n: Net4) -> Bool []
+    todo("cidr-nv.ipreg.partly_private4")
+
+// True when every address in `n` is `127.0.0.0/8`.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipreg
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(127, 0, 0, 0), 8)
+//     println("${ipreg.is_loopback4(n.net)}")
+// ```
+pub fn is_loopback4(n: Net4) -> Bool []
+    todo("cidr-nv.ipreg.is_loopback4")
+
+// True when every address in `n` is `169.254.0.0/16`.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipreg
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(169, 254, 0, 0), 16)
+//     println("${ipreg.is_link_local4(n.net)}")
+// ```
+pub fn is_link_local4(n: Net4) -> Bool []
+    todo("cidr-nv.ipreg.is_link_local4")
+
+// True when every address in `n` is `224.0.0.0/4`.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipreg
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(224, 0, 0, 0), 4)
+//     println("${ipreg.is_multicast4(n.net)}")
+// ```
+pub fn is_multicast4(n: Net4) -> Bool []
+    todo("cidr-nv.ipreg.is_multicast4")
+
+// True when every address in `n` is in one of the three TEST-NET
+// blocks reserved for documentation.
+//
+// Three blocks and not one — `192.0.2.0/24`, `198.51.100.0/24`,
+// `203.0.113.0/24` — which is why a caller cannot do this with a
+// single `contains`.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipreg
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(192, 0, 2, 0), 24)
+//     println("${ipreg.is_documentation4(n.net)}")
+// ```
+pub fn is_documentation4(n: Net4) -> Bool []
+    todo("cidr-nv.ipreg.is_documentation4")
+
+// True when every address in `n` is `100.64.0.0/10` — the shared
+// address space a carrier-grade NAT sits behind.
+//
+// Not private and not public, which is the combination no single
+// classification names and the reason `CidrSpecial` carries five
+// flags.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipreg
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(100, 64, 0, 0), 10)
+//     println("${ipreg.is_shared4(n.net)}")
+// ```
+pub fn is_shared4(n: Net4) -> Bool []
+    todo("cidr-nv.ipreg.is_shared4")
+
+// True when every address in `n` is reachable from the public
+// Internet — no registry row that covers it says otherwise.
+//
+// The one question a route filter actually asks, and the one this
+// module is arranged around.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipreg
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(8, 8, 8, 0), 24)
+//     println("${ipreg.is_global4(n.net)}")
+// ```
+pub fn is_global4(n: Net4) -> Bool []
+    todo("cidr-nv.ipreg.is_global4")
+
+// True when no address in `n` may appear as a destination on the
+// public Internet — a bogon.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipreg
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(192, 0, 2, 0), 24)
+//     println("${ipreg.is_bogon4(n.net)}")
+// ```
+pub fn is_bogon4(n: Net4) -> Bool []
+    todo("cidr-nv.ipreg.is_bogon4")
+
+// The full bogon list for IPv4: every prefix that is not globally
+// reachable, aggregated.
+//
+// What a router's inbound filter is, written once rather than copied
+// out of somebody's blog post.
+//
+// ```novo
+// use std.list
+// use ipreg
+//
+// fn main() [io]
+//     println("${list.len(ipreg.bogons4())}")
+// ```
+pub fn bogons4() -> [Net4] []
+    todo("cidr-nv.ipreg.bogons4")
+
+// ── the same, for IPv6 ───────────────────────────────────────────────
+
+// True when every address in `n` is `fc00::/7` — unique local.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipreg
+//
+// fn main() [io]
+//     let n = cidr.net6(ip.ipv6(0xFC00, 0, 0, 0, 0, 0, 0, 0), 7)
+//     println("${ipreg.is_unique_local6(n.net)}")
+// ```
+pub fn is_unique_local6(n: Net6) -> Bool []
+    todo("cidr-nv.ipreg.is_unique_local6")
+
+// True when every address in `n` is `fe80::/10`.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipreg
+//
+// fn main() [io]
+//     let n = cidr.net6(ip.ipv6(0xFE80, 0, 0, 0, 0, 0, 0, 0), 10)
+//     println("${ipreg.is_link_local6(n.net)}")
+// ```
+pub fn is_link_local6(n: Net6) -> Bool []
+    todo("cidr-nv.ipreg.is_link_local6")
+
+// True when every address in `n` is `ff00::/8`.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipreg
+//
+// fn main() [io]
+//     let n = cidr.net6(ip.ipv6(0xFF00, 0, 0, 0, 0, 0, 0, 0), 8)
+//     println("${ipreg.is_multicast6(n.net)}")
+// ```
+pub fn is_multicast6(n: Net6) -> Bool []
+    todo("cidr-nv.ipreg.is_multicast6")
+
+// True when every address in `n` is `2001:db8::/32`.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipreg
+//
+// fn main() [io]
+//     let n = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32)
+//     println("${ipreg.is_documentation6(n.net)}")
+// ```
+pub fn is_documentation6(n: Net6) -> Bool []
+    todo("cidr-nv.ipreg.is_documentation6")
+
+// True when every address in `n` is reachable from the public
+// Internet.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipreg
+//
+// fn main() [io]
+//     let n = cidr.net6(ip.ipv6(0x2000, 0, 0, 0, 0, 0, 0, 0), 3)
+//     println("${ipreg.is_global6(n.net)}")
+// ```
+pub fn is_global6(n: Net6) -> Bool []
+    todo("cidr-nv.ipreg.is_global6")
+
+// True when no address in `n` may appear as a destination on the
+// public Internet.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipreg
+//
+// fn main() [io]
+//     let n = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32)
+//     println("${ipreg.is_bogon6(n.net)}")
+// ```
+pub fn is_bogon6(n: Net6) -> Bool []
+    todo("cidr-nv.ipreg.is_bogon6")
+
+// The full bogon list for IPv6, aggregated.
+//
+// ```novo
+// use std.list
+// use ipreg
+//
+// fn main() [io]
+//     println("${list.len(ipreg.bogons6())}")
+// ```
+pub fn bogons6() -> [Net6] []
+    todo("cidr-nv.ipreg.bogons6")
+
+// The date of the IANA registry snapshot this table was compiled
+// from, as `YYYY-MM-DD`.
+//
+// Published because a table compiled into a package goes stale
+// silently, and a caller running a route filter deserves to be able to
+// print how old their bogon list is.
+//
+// ```novo
+// use ipreg
+//
+// fn main() [io]
+//     println(ipreg.registry_date())
+// ```
+pub fn registry_date() -> Str []
+    todo("cidr-nv.ipreg.registry_date")

@@ -1,0 +1,521 @@
+// iptrie.nv — longest-prefix match: the question a routing table, a
+// firewall and a geolocation lookup all are.
+//
+// Every body here is a `todo()`; the signatures are the design.
+//
+// THE MATCH ANSWERS AN INDEX INTO THE CALLER'S OWN TABLE, never a
+// value of its own.  A routing table's rows carry a next hop, a
+// firewall's carry an action, a geolocation table's carry a country;
+// the one thing they have in common is a prefix, and the one thing
+// this package knows how to do is find which prefix is longest.  So
+// `lookup4` answers `Int` — the position in the list of prefixes the
+// caller handed over — and what lives at that position is none of this
+// package's business.  A trie parameterised over a payload type would
+// have made the payload allocate, which is exactly what the device
+// consumer cannot have.
+//
+// TWO FACES, AND THE DEVICE ONE IS THE REASON THE PACKAGE CLAIMS
+// `@tier(embedded)`.
+//
+//   the HOST face   `CidrTrie4` built from a list of `Net4`, matching
+//                   in prefix-length order with a walk down the bits.
+//                   Right for a table with thousands of rows that is
+//                   built once and queried constantly.
+//
+//   the DEVICE face `CidrRule4` — a `@value` struct of three `Int`s —
+//                   and `rule_holds4` / `rule_beats4`, two predicates
+//                   over which the CALLER writes its own loop across
+//                   its own fixed array.  Right for the eight to
+//                   thirty-two rules a firmware firewall has, where
+//                   building a trie would cost more than scanning the
+//                   table.
+//
+// WHY THE DEVICE FACE SPEAKS RAW INTEGERS RATHER THAN `Ipv4`.  Two
+// reasons, and both are facts about the device rather than a
+// preference.  First: on a device the four octets come out of a packet
+// header, not out of a string, and ipaddr-nv's parsers carry
+// `@tier(app)` precisely because the embedded runtime defines no
+// string-byte read — so the address a firmware holds was never an
+// `Ipv4` to begin with.  Second: the audit builds a device probe
+// against this package's own types only, so a surface that named
+// ipaddr-nv's would be a claim that could not be checked.  The
+// conversion is one call in each direction on the host side, and
+// `rule_from_net4` is it.
+//
+// A RULE IS THREE INTEGERS AND NOTHING ELSE: the masked base, the
+// prefix length, and a tag the caller assigns — an index, an action
+// code, a port number.  Three `Int`s in a `@value` struct is 24 bytes
+// and no allocation, so a table of thirty-two rules is 768 bytes of
+// `.rodata` and the match is a loop with two comparisons in it.
+
+use ip
+use cidr
+use ipnet
+
+// One rule of a device's IPv4 prefix table.
+//
+// `base` is the network address as a 32-bit integer, ALREADY MASKED to
+// `prefix` bits — a rule built by hand with host bits set would match
+// nothing and look correct, so `rule4` masks and `rule_is_normal4`
+// checks.
+pub @value
+struct CidrRule4
+    // The network address, masked, as a 32-bit unsigned value in an
+    // `Int`.
+    base: Int
+    // `0 ..= 32`.
+    prefix: Int
+    // Whatever the caller wants to find again: a row index, an action
+    // code, an interface number.  This package never reads it.
+    tag: Int
+
+// One rule of a device's IPv6 prefix table.
+//
+// The address is two 64-bit halves, which is how ipaddr-nv holds an
+// `Ipv6` and how a 32-bit core has to hold one either way.
+pub @value
+struct CidrRule6
+    // The top 64 bits of the network address, masked.
+    hi: Int
+    // The bottom 64 bits, masked.
+    lo: Int
+    // `0 ..= 128`.
+    prefix: Int
+    // The caller's own value.
+    tag: Int
+
+// A built IPv4 prefix table: the host face.
+//
+// Opaque on purpose — the fields are a bit-walk's internal arrays and
+// a caller that read them would be depending on a representation this
+// package intends to change once it is measured.
+pub struct CidrTrie4
+    // The prefixes the trie was built from, in the order the caller
+    // gave them; `lookup4` answers an index into this.
+    nets: [Net4]
+    // The trie's nodes, as a flat array of child indices.
+    nodes: [Int]
+    // Which node index, if any, terminates a prefix, and which prefix.
+    leaves: [Int]
+
+// A built IPv6 prefix table.
+pub struct CidrTrie6
+    // The prefixes the trie was built from, in the caller's order.
+    nets: [Net6]
+    // The trie's nodes.
+    nodes: [Int]
+    // The terminating prefix at each node, or `-1`.
+    leaves: [Int]
+
+// ── the device face ──────────────────────────────────────────────────
+
+// A rule, with the base masked to `prefix` bits.
+//
+// ```novo
+// use iptrie
+//
+// fn main() [io]
+//     println("${iptrie.rule4(0xC0000205, 24, 7).base}")
+// ```
+pub @tier(embedded)
+fn rule4(base: Int, prefix: Int, tag: Int) -> CidrRule4 []
+    todo("cidr-nv.iptrie.rule4")
+
+// An IPv6 rule, with both halves masked to `prefix` bits.
+//
+// ```novo
+// use iptrie
+//
+// fn main() [io]
+//     println("${iptrie.rule6(0x20010DB800000000, 1, 32, 7).lo}")
+// ```
+pub @tier(embedded)
+fn rule6(hi: Int, lo: Int, prefix: Int, tag: Int) -> CidrRule6 []
+    todo("cidr-nv.iptrie.rule6")
+
+// A 32-bit mask with the top `prefix` bits set.
+//
+// The one piece of arithmetic every other function here is written in
+// terms of, published because a firmware building a rule table at
+// compile time wants it too.
+//
+// ```novo
+// use iptrie
+//
+// fn main() [io]
+//     println("${iptrie.mask4(24)}")
+// ```
+pub @tier(embedded)
+fn mask4(prefix: Int) -> Int []
+    todo("cidr-nv.iptrie.mask4")
+
+// The prefix length a dotted netmask spells, or `-1` when the mask is
+// not a run of ones followed by a run of zeros.
+//
+// The conversion a device configured with `255.255.255.0` needs.
+// ipaddr-nv REFUSES to parse the netmask form of a CIDR string, for a
+// stated reason — the same four octets can be a netmask or a hostmask
+// and the two mean different prefixes — and this function is the other
+// half of that decision: the conversion is available where a caller
+// has already decided which of the two they are holding, and it is not
+// available by guessing inside a parser.
+//
+// ```novo
+// use iptrie
+//
+// fn main() [io]
+//     println("${iptrie.prefix_of_mask4(0xFFFFFF00)}")
+// ```
+pub @tier(embedded)
+fn prefix_of_mask4(mask: Int) -> Int []
+    todo("cidr-nv.iptrie.prefix_of_mask4")
+
+// True when `addr` is inside `r`.
+//
+// One shift, one mask and one comparison.  The inner half of a device
+// firewall's scan.
+//
+// ```novo
+// use iptrie
+//
+// fn main() [io]
+//     println("${iptrie.rule_holds4(iptrie.rule4(0xC0000200, 24, 0), 0xC0000205)}")
+// ```
+pub @tier(embedded)
+fn rule_holds4(r: CidrRule4, addr: Int) -> Bool []
+    todo("cidr-nv.iptrie.rule_holds4")
+
+// True when `a` is a better match than `b` — a longer prefix wins, and
+// an equal prefix keeps `b`, so a caller scanning its table in order
+// gets the FIRST of two equally specific rules.
+//
+// Published as a predicate rather than folded into a match function
+// because a device's table lives in the caller's own array and a
+// library that took the array would be a library that decided how the
+// array is stored.  The loop a firmware writes is four lines and this
+// is two of them.
+//
+// ```novo
+// use iptrie
+//
+// fn main() [io]
+//     let a = iptrie.rule4(0xC0000200, 24, 0)
+//     let b = iptrie.rule4(0xC0000000, 8, 1)
+//     println("${iptrie.rule_beats4(a, b)}")
+// ```
+pub @tier(embedded)
+fn rule_beats4(a: CidrRule4, b: CidrRule4) -> Bool []
+    todo("cidr-nv.iptrie.rule_beats4")
+
+// True when `r`'s base has no bits set below its prefix.
+//
+// A rule with host bits set matches nothing and looks correct, so a
+// firmware that builds its table from a configuration blob checks it
+// once at start-up with this.
+//
+// ```novo
+// use iptrie
+//
+// fn main() [io]
+//     println("${iptrie.rule_is_normal4(iptrie.rule4(0xC0000200, 24, 0))}")
+// ```
+pub @tier(embedded)
+fn rule_is_normal4(r: CidrRule4) -> Bool []
+    todo("cidr-nv.iptrie.rule_is_normal4")
+
+// A rule that matches nothing, for the slot in a fixed table that is
+// not in use.
+//
+// `prefix` 32 and `base` 0 would match `0.0.0.0` and `prefix` 0 would
+// match everything, so "unused" needs a spelling of its own and this
+// is it: `prefix` is `-1`, `rule_holds4` answers false for it, and
+// `rule_beats4` never picks it.
+//
+// ```novo
+// use iptrie
+//
+// fn main() [io]
+//     println("${iptrie.rule_none4().prefix}")
+// ```
+pub @tier(embedded)
+fn rule_none4() -> CidrRule4 []
+    todo("cidr-nv.iptrie.rule_none4")
+
+// True when `r` is the unused rule.
+//
+// ```novo
+// use iptrie
+//
+// fn main() [io]
+//     println("${iptrie.rule_is_none4(iptrie.rule_none4())}")
+// ```
+pub @tier(embedded)
+fn rule_is_none4(r: CidrRule4) -> Bool []
+    todo("cidr-nv.iptrie.rule_is_none4")
+
+// True when `addr` is inside `r`.
+//
+// ```novo
+// use iptrie
+//
+// fn main() [io]
+//     let r = iptrie.rule6(0x20010DB800000000, 0, 32, 0)
+//     println("${iptrie.rule_holds6(r, 0x20010DB800000000, 1)}")
+// ```
+pub @tier(embedded)
+fn rule_holds6(r: CidrRule6, hi: Int, lo: Int) -> Bool []
+    todo("cidr-nv.iptrie.rule_holds6")
+
+// True when `a` is a better match than `b`.
+//
+// ```novo
+// use iptrie
+//
+// fn main() [io]
+//     let a = iptrie.rule6(0x20010DB800000000, 0, 48, 0)
+//     let b = iptrie.rule6(0x20010DB800000000, 0, 32, 1)
+//     println("${iptrie.rule_beats6(a, b)}")
+// ```
+pub @tier(embedded)
+fn rule_beats6(a: CidrRule6, b: CidrRule6) -> Bool []
+    todo("cidr-nv.iptrie.rule_beats6")
+
+// The unused IPv6 rule.
+//
+// ```novo
+// use iptrie
+//
+// fn main() [io]
+//     println("${iptrie.rule_none6().prefix}")
+// ```
+pub @tier(embedded)
+fn rule_none6() -> CidrRule6 []
+    todo("cidr-nv.iptrie.rule_none6")
+
+// True when `r` is the unused IPv6 rule.
+//
+// ```novo
+// use iptrie
+//
+// fn main() [io]
+//     println("${iptrie.rule_is_none6(iptrie.rule_none6())}")
+// ```
+pub @tier(embedded)
+fn rule_is_none6(r: CidrRule6) -> Bool []
+    todo("cidr-nv.iptrie.rule_is_none6")
+
+// ── the host face ────────────────────────────────────────────────────
+
+// A rule built from a network, with the caller's tag.
+//
+// The bridge between the two faces: a host reads a configuration file
+// into `Net4` values, converts them here, and flashes the array.
+//
+// ```novo
+// use ip
+// use cidr
+// use iptrie
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(192, 0, 2, 0), 24)
+//     println("${iptrie.rule_from_net4(n.net, 7).prefix}")
+// ```
+pub fn rule_from_net4(n: Net4, tag: Int) -> CidrRule4 []
+    todo("cidr-nv.iptrie.rule_from_net4")
+
+// The network a rule describes.
+//
+// ```novo
+// use iptrie
+//
+// fn main() [io]
+//     println("${iptrie.net_from_rule4(iptrie.rule4(0xC0000200, 24, 0)).is_ok()}")
+// ```
+pub fn net_from_rule4(r: CidrRule4) -> ipnet.CidrNet4Ans []
+    todo("cidr-nv.iptrie.net_from_rule4")
+
+// An IPv6 rule built from a network.
+//
+// ```novo
+// use ip
+// use cidr
+// use iptrie
+//
+// fn main() [io]
+//     let n = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32)
+//     println("${iptrie.rule_from_net6(n.net, 7).prefix}")
+// ```
+pub fn rule_from_net6(n: Net6, tag: Int) -> CidrRule6 []
+    todo("cidr-nv.iptrie.rule_from_net6")
+
+// The IPv6 network a rule describes.
+//
+// ```novo
+// use iptrie
+//
+// fn main() [io]
+//     let r = iptrie.rule6(0x20010DB800000000, 0, 32, 0)
+//     println("${iptrie.net_from_rule6(r).is_ok()}")
+// ```
+pub fn net_from_rule6(r: CidrRule6) -> ipnet.CidrNet6Ans []
+    todo("cidr-nv.iptrie.net_from_rule6")
+
+// A trie over `nets`, built once and queried many times.
+//
+// Duplicate prefixes are kept — `lookup4` answers the index of the
+// FIRST — because a table with two rules for one prefix is a
+// configuration mistake this package should report rather than repair,
+// and `duplicates4` is what reports it.
+//
+// ```novo
+// use iptrie
+//
+// fn main() [io]
+//     println("${iptrie.count4(iptrie.build4([]))}")
+// ```
+pub fn build4(nets: [Net4]) -> CidrTrie4 []
+    todo("cidr-nv.iptrie.build4")
+
+// A trie over `nets`.
+//
+// ```novo
+// use iptrie
+//
+// fn main() [io]
+//     println("${iptrie.count6(iptrie.build6([]))}")
+// ```
+pub fn build6(nets: [Net6]) -> CidrTrie6 []
+    todo("cidr-nv.iptrie.build6")
+
+// The index into the trie's own `nets` of the LONGEST prefix holding
+// `addr`, or `-1` when none does.
+//
+// The one call the module exists for.  The index is into the list the
+// caller passed to `build4`, in that order, so the caller looks up
+// whatever it stored beside each prefix.
+//
+// ```novo
+// use ip
+// use iptrie
+//
+// fn main() [io]
+//     println("${iptrie.lookup4(iptrie.build4([]), ip.ipv4(192, 0, 2, 1))}")
+// ```
+pub fn lookup4(t: CidrTrie4, addr: Ipv4) -> Int []
+    todo("cidr-nv.iptrie.lookup4")
+
+// The index of the longest prefix holding `addr`, or `-1`.
+//
+// ```novo
+// use ip
+// use iptrie
+//
+// fn main() [io]
+//     let a = ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 1)
+//     println("${iptrie.lookup6(iptrie.build6([]), a)}")
+// ```
+pub fn lookup6(t: CidrTrie6, addr: Ipv6) -> Int []
+    todo("cidr-nv.iptrie.lookup6")
+
+// Every prefix in the trie holding `addr`, longest first.
+//
+// What a policy engine that applies more than one matching rule needs,
+// and what a person debugging "why did this address take that route"
+// needs even more.
+//
+// ```novo
+// use std.list
+// use ip
+// use iptrie
+//
+// fn main() [io]
+//     println("${list.len(iptrie.lookup_all4(iptrie.build4([]), ip.ipv4(192, 0, 2, 1)))}")
+// ```
+pub fn lookup_all4(t: CidrTrie4, addr: Ipv4) -> [Int] []
+    todo("cidr-nv.iptrie.lookup_all4")
+
+// Every prefix in the trie holding `addr`, longest first.
+//
+// ```novo
+// use std.list
+// use ip
+// use iptrie
+//
+// fn main() [io]
+//     let a = ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 1)
+//     println("${list.len(iptrie.lookup_all6(iptrie.build6([]), a))}")
+// ```
+pub fn lookup_all6(t: CidrTrie6, addr: Ipv6) -> [Int] []
+    todo("cidr-nv.iptrie.lookup_all6")
+
+// The index of the longest prefix in the trie that CONTAINS `n`
+// entirely, or `-1`.
+//
+// The route-origin question — "which of my announced prefixes covers
+// this one" — as opposed to the packet-forwarding question `lookup4`
+// answers.
+//
+// ```novo
+// use ip
+// use cidr
+// use iptrie
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(192, 0, 2, 0), 24)
+//     println("${iptrie.covering4(iptrie.build4([]), n.net)}")
+// ```
+pub fn covering4(t: CidrTrie4, n: Net4) -> Int []
+    todo("cidr-nv.iptrie.covering4")
+
+// How many prefixes the trie holds.
+//
+// ```novo
+// use iptrie
+//
+// fn main() [io]
+//     println("${iptrie.count4(iptrie.build4([]))}")
+// ```
+pub fn count4(t: CidrTrie4) -> Int []
+    todo("cidr-nv.iptrie.count4")
+
+// How many prefixes the trie holds.
+//
+// ```novo
+// use iptrie
+//
+// fn main() [io]
+//     println("${iptrie.count6(iptrie.build6([]))}")
+// ```
+pub fn count6(t: CidrTrie6) -> Int []
+    todo("cidr-nv.iptrie.count6")
+
+// The indices of prefixes that appear more than once, in ascending
+// order, second occurrence onward.
+//
+// A configuration mistake the trie will not repair and will not hide.
+//
+// ```novo
+// use std.list
+// use iptrie
+//
+// fn main() [io]
+//     println("${list.len(iptrie.duplicates4(iptrie.build4([])))}")
+// ```
+pub fn duplicates4(t: CidrTrie4) -> [Int] []
+    todo("cidr-nv.iptrie.duplicates4")
+
+// How many bytes a device table of `n` IPv4 rules occupies.
+//
+// The number a firmware author needs before deciding how many rules
+// fit, answered by the package rather than by counting fields in the
+// struct definition.
+//
+// ```novo
+// use iptrie
+//
+// fn main() [io]
+//     println("${iptrie.rule_table_bytes4(32)}")
+// ```
+pub @tier(embedded)
+fn rule_table_bytes4(n: Int) -> Int []
+    todo("cidr-nv.iptrie.rule_table_bytes4")

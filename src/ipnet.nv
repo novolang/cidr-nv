@@ -1,0 +1,665 @@
+// ipnet.nv — the subnet arithmetic ipaddr-nv's `cidr` module does not
+// do, over ipaddr-nv's own network types.
+//
+// Every body here is a `todo()`; the signatures are the design.
+//
+// NO SECOND NETWORK TYPE.  `Net4` and `Net6` are ipaddr-nv's and this
+// package does not redeclare them.  Public type names are keyed by
+// name across the whole assembly, so a package that declared its own
+// `Net4` would be a package nobody could use alongside ipaddr-nv; and
+// the thing the plan's row anticipated — "the split if subnet
+// arithmetic outgrows that module" — is satisfied by moving the
+// ARITHMETIC here and leaving the TYPES where the published,
+// implemented package already put them.
+//
+// SUBNETS AND HOSTS ARE INDEX ARITHMETIC, NEVER A LIST.  A /8 has
+// 16 777 216 addresses and a /64 has more addresses than a machine has
+// bytes, so a function that answered "the hosts in this network" as a
+// list is a function that cannot be called on the networks people
+// actually have.  `nth_host4(n, i)` and `host_count4(n)` are what a
+// `for i in 0..k` needs, and that is the whole iteration API.  The
+// same holds for the subnets of a prefix.
+//
+// A FALLIBLE ANSWER IS A `@value` STRUCT, NOT A `Result`.  SPEC § 14.5
+// refuses a `@value` struct as a `Result` or optional payload, and
+// `Net4` is one.  ipaddr-nv already met this and answered it with
+// `Net4Parse` — an error code beside the value — and this package uses
+// the same shape and the same error codes, read back through
+// `ipaddr-nv`'s `ip.error_of`, so a program does not learn two
+// vocabularies for one kind of mistake.
+//
+// COUNTS THAT DO NOT FIT ARE SAID SO.  An IPv6 /32 has 2^96 addresses
+// and `Int` is 64 bits.  ipaddr-nv's `num_addresses` answers `-1` for
+// those, and so do the counts here; `host_bits6` is the answer that
+// always fits, because a caller deciding whether a prefix is worth
+// enumerating wants the exponent rather than the number.
+
+use ip
+use cidr
+
+// A network, or the reason there is not one.
+//
+// The shape ipaddr-nv's `Net4Parse` has, for the same reason: a
+// `@value` struct cannot be a `Result` payload, so the reason travels
+// beside the value rather than around it.  `err` is `0` on success and
+// otherwise one of ipaddr-nv's codes, readable through `ip.error_of`.
+pub @value
+struct CidrNet4Ans
+    err: Int
+    net: Net4
+
+// An IPv6 network, or the reason there is not one.
+pub @value
+struct CidrNet6Ans
+    err: Int
+    net: Net6
+
+// An address, or the reason there is not one.
+pub @value
+struct CidrAddr4Ans
+    err: Int
+    addr: Ipv4
+
+// An IPv6 address, or the reason there is not one.
+pub @value
+struct CidrAddr6Ans
+    err: Int
+    addr: Ipv6
+
+// The error codes this package adds to ipaddr-nv's, for the mistakes
+// ipaddr-nv has no reason to have a code for.
+//
+// Numbered above ipaddr-nv's so `ip.error_of` answers `None` for them
+// rather than the wrong reason, and `reason` here names them.
+pub enum CidrFault
+    // A new prefix length was outside `0 ..= 32` for IPv4 or
+    // `0 ..= 128` for IPv6.
+    CidrPrefixOutOfRange
+    // A supernet was asked for with a LONGER prefix than the network
+    // has, or a subnet with a SHORTER one.  The two are different
+    // mistakes and the message says which.
+    CidrPrefixWrongDirection
+    // An index was outside the range the network holds.
+    CidrIndexOutOfRange
+    // The answer would need more than 64 bits to count.  Only IPv6
+    // reaches this.
+    CidrCountTooLarge
+    // A network was excluded from another it is not inside.
+    CidrNotContained
+    // Two networks of different families were compared or aggregated
+    // together.
+    CidrFamilyMismatch
+
+// Whether an answer carries a network.  Every fallible call in
+// this module answers one of these rather than a `Result`,
+// because SPEC § 14.5 refuses a `@value` struct as a `Result`
+// payload and `Net4` is one; `is_ok` is the guard a caller
+// writes instead of a `match`.
+impl CidrNet4Ans
+    // True when there is a network here.
+    @tier(embedded)
+    fn is_ok(self) -> Bool
+        todo("cidr-nv.ipnet.CidrNet4Ans.is_ok")
+
+// Whether an answer carries an IPv6 network.
+impl CidrNet6Ans
+    // True when there is a network here.
+    @tier(embedded)
+    fn is_ok(self) -> Bool
+        todo("cidr-nv.ipnet.CidrNet6Ans.is_ok")
+
+// Whether an answer carries an address.  The indexers answer
+// these, so a walk over a network's hosts checks once per step
+// and never reads an address that is not there.
+impl CidrAddr4Ans
+    // True when there is an address here.
+    @tier(embedded)
+    fn is_ok(self) -> Bool
+        todo("cidr-nv.ipnet.CidrAddr4Ans.is_ok")
+
+// Whether an answer carries an IPv6 address.
+impl CidrAddr6Ans
+    // True when there is an address here.
+    @tier(embedded)
+    fn is_ok(self) -> Bool
+        todo("cidr-nv.ipnet.CidrAddr6Ans.is_ok")
+
+// One line a person can act on for one of this package's own codes.
+//
+// ipaddr-nv's `show.reason` is the one for its codes; this is the one
+// for the codes above, and the two vocabularies do not overlap.
+//
+// ```novo
+// use ipnet
+//
+// fn main() [io]
+//     println(ipnet.reason(CidrPrefixWrongDirection))
+// ```
+pub fn reason(f: CidrFault) -> Str []
+    todo("cidr-nv.ipnet.reason")
+
+// The integer code a `CidrFault` travels as inside a `CidrNet4Ans`.
+//
+// ```novo
+// use ipnet
+//
+// fn main() [io]
+//     println("${ipnet.code_of(CidrIndexOutOfRange)}")
+// ```
+pub fn code_of(f: CidrFault) -> Int []
+    todo("cidr-nv.ipnet.code_of")
+
+// The fault an `err` names, or `None` when it is one of ipaddr-nv's
+// codes or zero.
+//
+// ```novo
+// use ipnet
+//
+// fn main() [io]
+//     match ipnet.fault_of(ipnet.code_of(CidrIndexOutOfRange))
+//         Some(_) => println("this package's")
+//         None    => println("ipaddr-nv's, or no error at all")
+// ```
+pub fn fault_of(code: Int) -> ?CidrFault []
+    todo("cidr-nv.ipnet.fault_of")
+
+// ── containment ──────────────────────────────────────────────────────
+
+// True when every address in `a` is also in `b`.
+//
+// A network is a subnet of itself, which is the convention
+// `ipaddress.subnet_of` uses and the one that makes
+// `subnet_of4(a, b) and subnet_of4(b, a)` mean "the same network".
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let small = cidr.net4(ip.ipv4(10, 1, 0, 0), 16)
+//     let big = cidr.net4(ip.ipv4(10, 0, 0, 0), 8)
+//     println("${ipnet.subnet_of4(small.net, big.net)}")
+// ```
+pub fn subnet_of4(a: Net4, b: Net4) -> Bool []
+    todo("cidr-nv.ipnet.subnet_of4")
+
+// True when every address in `b` is also in `a`.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let small = cidr.net4(ip.ipv4(10, 1, 0, 0), 16)
+//     let big = cidr.net4(ip.ipv4(10, 0, 0, 0), 8)
+//     println("${ipnet.supernet_of4(big.net, small.net)}")
+// ```
+pub fn supernet_of4(a: Net4, b: Net4) -> Bool []
+    todo("cidr-nv.ipnet.supernet_of4")
+
+// True when every address in `a` is also in `b`.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let small = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 1, 0, 0, 0, 0, 0), 48)
+//     let big = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32)
+//     println("${ipnet.subnet_of6(small.net, big.net)}")
+// ```
+pub fn subnet_of6(a: Net6, b: Net6) -> Bool []
+    todo("cidr-nv.ipnet.subnet_of6")
+
+// True when every address in `b` is also in `a`.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let small = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 1, 0, 0, 0, 0, 0), 48)
+//     let big = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32)
+//     println("${ipnet.supernet_of6(big.net, small.net)}")
+// ```
+pub fn supernet_of6(a: Net6, b: Net6) -> Bool []
+    todo("cidr-nv.ipnet.supernet_of6")
+
+// ── supernets ────────────────────────────────────────────────────────
+
+// The network `n` sits in at prefix length `prefix`.
+//
+// `CidrPrefixWrongDirection` when `prefix` is longer than `n`'s: a
+// supernet is always shorter, and asking for a longer one is a subnet
+// question with the wrong function.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(192, 0, 2, 0), 24)
+//     println("${ipnet.supernet4(n.net, 16).is_ok()}")
+// ```
+pub fn supernet4(n: Net4, prefix: Int) -> CidrNet4Ans []
+    todo("cidr-nv.ipnet.supernet4")
+
+// The IPv6 network `n` sits in at prefix length `prefix`.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let n = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 48)
+//     println("${ipnet.supernet6(n.net, 32).is_ok()}")
+// ```
+pub fn supernet6(n: Net6, prefix: Int) -> CidrNet6Ans []
+    todo("cidr-nv.ipnet.supernet6")
+
+// The immediate supernet: `n` with one bit taken off its prefix.
+//
+// What "zoom out one level" is, and the step a route aggregator takes
+// repeatedly.  A `/0` has no supernet and answers
+// `CidrPrefixWrongDirection`.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(192, 0, 2, 0), 24)
+//     println("${ipnet.parent4(n.net).net.prefix}")
+// ```
+pub fn parent4(n: Net4) -> CidrNet4Ans []
+    todo("cidr-nv.ipnet.parent4")
+
+// The immediate IPv6 supernet.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let n = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32)
+//     println("${ipnet.parent6(n.net).net.prefix}")
+// ```
+pub fn parent6(n: Net6) -> CidrNet6Ans []
+    todo("cidr-nv.ipnet.parent6")
+
+// The other half of `n`'s parent — the network that, joined with `n`,
+// makes one network one bit shorter.
+//
+// The value route aggregation is built out of: two siblings collapse,
+// a network and a non-sibling neighbour do not, and the test is this
+// one call rather than three lines of bit arithmetic at each site.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(192, 0, 2, 0), 24)
+//     println("${ipnet.sibling4(n.net).net.network().octet(2)}")
+// ```
+pub fn sibling4(n: Net4) -> CidrNet4Ans []
+    todo("cidr-nv.ipnet.sibling4")
+
+// The other half of `n`'s parent.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let n = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32)
+//     println("${ipnet.sibling6(n.net).is_ok()}")
+// ```
+pub fn sibling6(n: Net6) -> CidrNet6Ans []
+    todo("cidr-nv.ipnet.sibling6")
+
+// ── subnets, by index ────────────────────────────────────────────────
+
+// How many networks of prefix length `prefix` fit inside `n`.
+//
+// `CidrPrefixWrongDirection` reported as `0` when `prefix` is shorter
+// than `n`'s; use `subnet_count4_ok` to tell that apart from a
+// network that genuinely holds none, which cannot happen.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(10, 0, 0, 0), 8)
+//     println("${ipnet.subnet_count4(n.net, 16)}")
+// ```
+pub fn subnet_count4(n: Net4, prefix: Int) -> Int []
+    todo("cidr-nv.ipnet.subnet_count4")
+
+// The `i`th network of prefix length `prefix` inside `n`, counting
+// from zero in address order.
+//
+// The whole of the subnetting API, because a `/8` split into `/24`s is
+// 65 536 networks and a caller that wanted the third one should not
+// have to build the other 65 535.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(10, 0, 0, 0), 8)
+//     println("${ipnet.nth_subnet4(n.net, 16, 2).net.network().octet(1)}")
+// ```
+pub fn nth_subnet4(n: Net4, prefix: Int, i: Int) -> CidrNet4Ans []
+    todo("cidr-nv.ipnet.nth_subnet4")
+
+// How many IPv6 networks of prefix length `prefix` fit inside `n`, or
+// `-1` when the answer needs more than 64 bits.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let n = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32)
+//     println("${ipnet.subnet_count6(n.net, 48)}")
+// ```
+pub fn subnet_count6(n: Net6, prefix: Int) -> Int []
+    todo("cidr-nv.ipnet.subnet_count6")
+
+// The `i`th IPv6 network of prefix length `prefix` inside `n`.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let n = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32)
+//     println("${ipnet.nth_subnet6(n.net, 48, 1).is_ok()}")
+// ```
+pub fn nth_subnet6(n: Net6, prefix: Int, i: Int) -> CidrNet6Ans []
+    todo("cidr-nv.ipnet.nth_subnet6")
+
+// `n` cut in two: the two networks one bit longer that cover it
+// exactly, as index `0` and index `1` of `nth_subnet4`.
+//
+// Published as its own call because halving is what a binary allocator
+// does at every step, and `nth_subnet4(n, n.prefix + 1, i)` is the
+// same thing said less clearly.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(10, 0, 0, 0), 8)
+//     println("${ipnet.half4(n.net, 1).net.network().octet(0)}")
+// ```
+pub fn half4(n: Net4, which: Int) -> CidrNet4Ans []
+    todo("cidr-nv.ipnet.half4")
+
+// `n` cut in two.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let n = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32)
+//     println("${ipnet.half6(n.net, 0).net.prefix}")
+// ```
+pub fn half6(n: Net6, which: Int) -> CidrNet6Ans []
+    todo("cidr-nv.ipnet.half6")
+
+// ── hosts and addresses, by index ────────────────────────────────────
+
+// How many addresses `n` holds, including the network and broadcast
+// addresses.
+//
+// ipaddr-nv's `num_addresses` is the same number; it is here as well
+// so a caller doing index arithmetic has the count and the indexer in
+// one module.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(192, 0, 2, 0), 24)
+//     println("${ipnet.address_count4(n.net)}")
+// ```
+pub fn address_count4(n: Net4) -> Int []
+    todo("cidr-nv.ipnet.address_count4")
+
+// The `i`th address in `n`, counting from zero at the network address.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(192, 0, 2, 0), 24)
+//     println("${ipnet.nth_address4(n.net, 255).addr.octet(3)}")
+// ```
+pub fn nth_address4(n: Net4, i: Int) -> CidrAddr4Ans []
+    todo("cidr-nv.ipnet.nth_address4")
+
+// How many USABLE hosts `n` holds: the addresses less the network and
+// broadcast addresses, for a prefix shorter than 31.
+//
+// A `/31` holds two hosts and no broadcast address — RFC 3021, which
+// exists because point-to-point links were wasting two addresses in
+// four — and a `/32` holds one.  Those two cases are why this is a
+// function and not a subtraction.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(192, 0, 2, 0), 31)
+//     println("${ipnet.host_count4(n.net)}")
+// ```
+pub fn host_count4(n: Net4) -> Int []
+    todo("cidr-nv.ipnet.host_count4")
+
+// The `i`th usable host in `n`, counting from zero at the first host.
+//
+// What a DHCP pool or an address allocator walks, and the reason there
+// is no `hosts()` returning a list: a `/8` has 16 777 214 of these.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(192, 0, 2, 0), 24)
+//     println("${ipnet.nth_host4(n.net, 0).addr.octet(3)}")
+// ```
+pub fn nth_host4(n: Net4, i: Int) -> CidrAddr4Ans []
+    todo("cidr-nv.ipnet.nth_host4")
+
+// Where `a` sits inside `n`, counting from zero at the network
+// address, or `-1` when `n` does not hold it.
+//
+// The inverse of `nth_address4`, and what an allocator that stores a
+// bitmap indexes it with.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(192, 0, 2, 0), 24)
+//     println("${ipnet.index_of4(n.net, ip.ipv4(192, 0, 2, 7))}")
+// ```
+pub fn index_of4(n: Net4, a: Ipv4) -> Int []
+    todo("cidr-nv.ipnet.index_of4")
+
+// How many addresses `n` holds, or `-1` when the answer needs more
+// than 64 bits — which is every prefix shorter than 65.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let n = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 126)
+//     println("${ipnet.address_count6(n.net)}")
+// ```
+pub fn address_count6(n: Net6) -> Int []
+    todo("cidr-nv.ipnet.address_count6")
+
+// How many bits of address space `n` holds: `128 - n.prefix`.
+//
+// The answer that always fits, and the one a caller deciding whether a
+// prefix is worth enumerating actually wants — "2^96" is a decision
+// and `-1` is not.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let n = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32)
+//     println("${ipnet.host_bits6(n.net)}")
+// ```
+pub fn host_bits6(n: Net6) -> Int []
+    todo("cidr-nv.ipnet.host_bits6")
+
+// The same, for IPv4: `32 - n.prefix`.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(192, 0, 2, 0), 24)
+//     println("${ipnet.host_bits4(n.net)}")
+// ```
+pub fn host_bits4(n: Net4) -> Int []
+    todo("cidr-nv.ipnet.host_bits4")
+
+// The `i`th address in an IPv6 network, counting from zero at the
+// network address.
+//
+// `i` is a 64-bit index, so an address more than 2^63 into a network
+// cannot be named this way; `CidrIndexOutOfRange` says so rather than
+// wrapping.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let n = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 64)
+//     println("${ipnet.nth_address6(n.net, 1).addr.group(7)}")
+// ```
+pub fn nth_address6(n: Net6, i: Int) -> CidrAddr6Ans []
+    todo("cidr-nv.ipnet.nth_address6")
+
+// Where `a` sits inside `n`, or `-1` when `n` does not hold it or the
+// offset needs more than 63 bits.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let n = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 64)
+//     println("${ipnet.index_of6(n.net, ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 1))}")
+// ```
+pub fn index_of6(n: Net6, a: Ipv6) -> Int []
+    todo("cidr-nv.ipnet.index_of6")
+
+// ── ordering ─────────────────────────────────────────────────────────
+
+// `a` before, equal to or after `b` as `-1`, `0`, `1`: by network
+// address first, then by prefix length with the SHORTER first.
+//
+// The order aggregation needs, because a supernet has to be seen
+// before the subnets it swallows.  It is also the order a routing
+// table is read in.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let a = cidr.net4(ip.ipv4(10, 0, 0, 0), 8)
+//     println("${ipnet.compare4(a.net, a.net)}")
+// ```
+pub fn compare4(a: Net4, b: Net4) -> Int []
+    todo("cidr-nv.ipnet.compare4")
+
+// `a` before, equal to or after `b`, by network address then prefix.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let a = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32)
+//     println("${ipnet.compare6(a.net, a.net)}")
+// ```
+pub fn compare6(a: Net6, b: Net6) -> Int []
+    todo("cidr-nv.ipnet.compare6")
+
+// True when `a` and `b` are the same network — the same address and
+// the same prefix length.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let a = cidr.net4(ip.ipv4(10, 0, 0, 0), 8)
+//     println("${ipnet.eq4(a.net, a.net)}")
+// ```
+pub fn eq4(a: Net4, b: Net4) -> Bool []
+    todo("cidr-nv.ipnet.eq4")
+
+// True when `a` and `b` are the same network.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipnet
+//
+// fn main() [io]
+//     let a = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32)
+//     println("${ipnet.eq6(a.net, a.net)}")
+// ```
+pub fn eq6(a: Net6, b: Net6) -> Bool []
+    todo("cidr-nv.ipnet.eq6")

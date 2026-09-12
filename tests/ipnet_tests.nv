@@ -1,0 +1,275 @@
+// ipnet_tests.nv — the subnet arithmetic, and the two mistakes it is
+// arranged to refuse.
+//
+// RED ON PURPOSE: every body under `src/` is a `todo()`, so every
+// assertion here reaches `not implemented: cidr-nv.<module>.<fn>`.
+// That is the expected result until the bodies land.
+//
+// THE VECTORS ARE PYTHON'S `ipaddress` SUITE, which is the reference
+// for `subnet_of`, `supernet_of` and the subnetting.  The numbers below
+// are the ones that suite asserts; where this package differs from
+// `ipaddress` on purpose — `/31` and `/32` host counts, the direction
+// check on `supernet` — the difference is asserted rather than
+// inherited.
+
+use std.test
+use ip
+use cidr
+use ipnet
+
+@test
+fn test_a_network_is_a_subnet_of_itself() [io]
+    let n = cidr.net4(ip.ipv4(10, 0, 0, 0), 8).net
+
+    test.case("which is what makes both directions mean the same network")
+    test.assert(ipnet.subnet_of4(n, n))
+    test.assert(ipnet.supernet_of4(n, n))
+    test.assert(ipnet.eq4(n, n))
+
+@test
+fn test_containment_is_about_every_address_not_the_first() [io]
+    let big = cidr.net4(ip.ipv4(10, 0, 0, 0), 8).net
+    let small = cidr.net4(ip.ipv4(10, 1, 0, 0), 16).net
+    let elsewhere = cidr.net4(ip.ipv4(11, 0, 0, 0), 8).net
+
+    test.case("a /16 inside a /8 is a subnet of it")
+    test.assert(ipnet.subnet_of4(small, big))
+    test.assert(ipnet.supernet_of4(big, small))
+
+    test.case("and the relation does not hold the other way round")
+    test.assert(ipnet.subnet_of4(big, small) == false)
+
+    test.case("a network that merely starts nearby is neither")
+    test.assert(ipnet.subnet_of4(elsewhere, big) == false)
+    test.assert(ipnet.supernet_of4(big, elsewhere) == false)
+
+@test
+fn test_a_supernet_is_always_shorter_and_asking_otherwise_is_named() [io]
+    let n = cidr.net4(ip.ipv4(192, 0, 2, 0), 24).net
+
+    test.case("zooming out works")
+    let up = ipnet.supernet4(n, 16)
+    test.assert(up.is_ok())
+    test.assert(up.net.prefix == 16)
+    test.assert(up.net.network().octet(1) == 0)
+
+    test.case("asking for a LONGER prefix is a subnet question with the wrong function")
+    let wrong = ipnet.supernet4(n, 28)
+    test.assert(wrong.is_ok() == false)
+    match ipnet.fault_of(wrong.err)
+        Some(f) =>
+            match f
+                CidrPrefixWrongDirection => test.assert(true)
+                _                        => test.assert(false)
+        None    => test.assert(false)
+
+    test.case("and a prefix outside 0..=32 is a different fault again")
+    test.assert(ipnet.supernet4(n, 33).is_ok() == false)
+
+@test
+fn test_a_parent_is_one_bit_shorter_and_a_slash_zero_has_none() [io]
+    let n = cidr.net4(ip.ipv4(192, 0, 2, 0), 24).net
+
+    test.case("one step out")
+    test.assert(ipnet.parent4(n).net.prefix == 23)
+
+    test.case("and the root has no parent, which is a refusal rather than itself")
+    let root = cidr.net4(ip.ipv4(0, 0, 0, 0), 0).net
+    test.assert(ipnet.parent4(root).is_ok() == false)
+
+@test
+fn test_a_sibling_is_the_other_half_of_the_parent() [io]
+    // The value route aggregation is built out of: two siblings
+    // collapse into their parent and a non-sibling neighbour does not.
+    let low = cidr.net4(ip.ipv4(192, 0, 2, 0), 25).net
+    let high = cidr.net4(ip.ipv4(192, 0, 2, 128), 25).net
+
+    test.case("each is the other's sibling")
+    test.assert(ipnet.eq4(ipnet.sibling4(low).net, high))
+    test.assert(ipnet.eq4(ipnet.sibling4(high).net, low))
+
+    test.case("and the sibling of a /0 does not exist")
+    test.assert(ipnet.sibling4(cidr.net4(ip.ipv4(0, 0, 0, 0), 0).net).is_ok() == false)
+
+@test
+fn test_subnets_are_counted_and_indexed_rather_than_listed() [io]
+    let n = cidr.net4(ip.ipv4(10, 0, 0, 0), 8).net
+
+    test.case("a /8 holds 256 /16s")
+    test.assert(ipnet.subnet_count4(n, 16) == 256)
+
+    test.case("and 65536 /24s, which is why there is no list")
+    test.assert(ipnet.subnet_count4(n, 24) == 65536)
+
+    test.case("the third /16 is 10.2.0.0, found without building the other 255")
+    let third = ipnet.nth_subnet4(n, 16, 2)
+    test.assert(third.is_ok())
+    test.assert(third.net.network().octet(1) == 2)
+    test.assert(third.net.prefix == 16)
+
+    test.case("an index off the end is refused rather than wrapped")
+    test.assert(ipnet.nth_subnet4(n, 16, 256).is_ok() == false)
+
+    test.case("and a prefix shorter than the network's holds none of it")
+    test.assert(ipnet.subnet_count4(n, 4) == 0)
+
+@test
+fn test_halving_is_its_own_call_because_an_allocator_does_it_at_every_step() [io]
+    let n = cidr.net4(ip.ipv4(10, 0, 0, 0), 8).net
+
+    test.case("the low half starts where the network does")
+    test.assert(ipnet.half4(n, 0).net.network().octet(0) == 10)
+    test.assert(ipnet.half4(n, 0).net.prefix == 9)
+
+    test.case("the high half starts halfway through")
+    test.assert(ipnet.half4(n, 1).net.network().octet(1) == 128)
+
+    test.case("and there is no third half")
+    test.assert(ipnet.half4(n, 2).is_ok() == false)
+
+@test
+fn test_host_counts_know_about_rfc_3021() [io]
+    test.case("a /24 has 254 usable hosts — the addresses less two")
+    let a = cidr.net4(ip.ipv4(192, 0, 2, 0), 24).net
+    test.assert(ipnet.address_count4(a) == 256)
+    test.assert(ipnet.host_count4(a) == 254)
+
+    test.case("a /31 has TWO, because RFC 3021 gives it no broadcast address")
+    let b = cidr.net4(ip.ipv4(192, 0, 2, 0), 31).net
+    test.assert(ipnet.address_count4(b) == 2)
+    test.assert(ipnet.host_count4(b) == 2)
+
+    test.case("and a /32 has one, which a subtraction would have made negative")
+    let c = cidr.net4(ip.ipv4(192, 0, 2, 1), 32).net
+    test.assert(ipnet.host_count4(c) == 1)
+
+@test
+fn test_hosts_and_addresses_are_indexed_both_ways() [io]
+    let n = cidr.net4(ip.ipv4(192, 0, 2, 0), 24).net
+
+    test.case("address zero is the network address")
+    test.assert(ipnet.nth_address4(n, 0).addr.octet(3) == 0)
+
+    test.case("the last address is the broadcast address")
+    test.assert(ipnet.nth_address4(n, 255).addr.octet(3) == 255)
+
+    test.case("host zero is the first USABLE address, which is one along")
+    test.assert(ipnet.nth_host4(n, 0).addr.octet(3) == 1)
+    test.assert(ipnet.nth_host4(n, 253).addr.octet(3) == 254)
+
+    test.case("and index_of4 is the inverse, which an allocator's bitmap needs")
+    test.assert(ipnet.index_of4(n, ip.ipv4(192, 0, 2, 7)) == 7)
+
+    test.case("an address outside the network has no index")
+    test.assert(ipnet.index_of4(n, ip.ipv4(192, 0, 3, 7)) == 0 - 1)
+
+    test.case("and an index off the end is refused")
+    test.assert(ipnet.nth_address4(n, 256).is_ok() == false)
+
+@test
+fn test_a_count_that_does_not_fit_says_so_and_the_exponent_always_does() [io]
+    let wide = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32).net
+
+    test.case("2^96 addresses do not fit in 64 bits")
+    test.assert(ipnet.address_count6(wide) == 0 - 1)
+
+    test.case("but the number of bits always does, and is the useful answer")
+    test.assert(ipnet.host_bits6(wide) == 96)
+
+    test.case("a narrow enough prefix counts exactly")
+    let narrow = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 126).net
+    test.assert(ipnet.address_count6(narrow) == 4)
+
+    test.case("and IPv4's exponent is the same idea")
+    test.assert(ipnet.host_bits4(cidr.net4(ip.ipv4(10, 0, 0, 0), 8).net) == 24)
+
+@test
+fn test_the_ipv6_half_of_everything_is_the_same_arithmetic() [io]
+    let big = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32).net
+    let small = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 1, 0, 0, 0, 0, 0), 48).net
+
+    test.case("containment")
+    test.assert(ipnet.subnet_of6(small, big))
+    test.assert(ipnet.supernet_of6(big, small))
+
+    test.case("supernets and parents")
+    test.assert(ipnet.supernet6(small, 32).is_ok())
+    test.assert(ipnet.parent6(big).net.prefix == 31)
+
+    test.case("subnet counts, where 2^16 of them still fits")
+    test.assert(ipnet.subnet_count6(big, 48) == 65536)
+
+    test.case("the nth subnet, found without the other 65535")
+    test.assert(ipnet.nth_subnet6(big, 48, 1).net.network().group(2) == 1)
+
+    test.case("and the increment carries between the two 64-bit halves")
+    let boundary = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 64).net
+    test.assert(ipnet.nth_address6(boundary, 1).addr.group(7) == 1)
+
+@test
+fn test_the_order_puts_a_supernet_before_what_it_swallows() [io]
+    // Aggregation depends on this: a shorter prefix at the same
+    // address has to be seen first, or a pass would emit the subnet
+    // and then have to take it back.
+    let wide = cidr.net4(ip.ipv4(10, 0, 0, 0), 8).net
+    let narrow = cidr.net4(ip.ipv4(10, 0, 0, 0), 16).net
+
+    test.case("same address, shorter prefix first")
+    test.assert(ipnet.compare4(wide, narrow) < 0)
+    test.assert(ipnet.compare4(narrow, wide) > 0)
+
+    test.case("different addresses order by address")
+    let later = cidr.net4(ip.ipv4(11, 0, 0, 0), 8).net
+    test.assert(ipnet.compare4(wide, later) < 0)
+
+    test.case("and equal networks compare equal")
+    test.assert(ipnet.compare4(wide, wide) == 0)
+
+    test.case("the IPv6 order is the same rule")
+    let a = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32).net
+    let b = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 48).net
+    test.assert(ipnet.compare6(a, b) < 0)
+    test.assert(ipnet.eq6(a, a))
+
+@test
+fn test_this_packages_faults_do_not_collide_with_ipaddr_nvs() [io]
+    test.case("a code from here reads back as one of this package's faults")
+    match ipnet.fault_of(ipnet.code_of(CidrIndexOutOfRange))
+        Some(_) => test.assert(true)
+        None    => test.assert(false)
+
+    test.case("zero is not a fault at all")
+    match ipnet.fault_of(0)
+        Some(_) => test.assert(false)
+        None    => test.assert(true)
+
+    test.case("and every fault has a line a person can act on")
+    test.assert(ipnet.reason(CidrPrefixWrongDirection) != "")
+    test.assert(ipnet.reason(CidrNotContained) != "")
+    test.assert(ipnet.reason(CidrCountTooLarge) != "")
+    test.assert(ipnet.reason(CidrFamilyMismatch) != "")
+    test.assert(ipnet.reason(CidrPrefixOutOfRange) != "")
+
+@test
+fn test_the_ipv6_siblings_halves_and_offsets() [io]
+    let low = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 33).net
+    let high = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0x8000, 0, 0, 0, 0, 0), 33).net
+
+    test.case("the two halves of a /32 are each other's sibling")
+    test.assert(ipnet.eq6(ipnet.sibling6(low).net, high))
+    test.assert(ipnet.eq6(ipnet.sibling6(high).net, low))
+
+    test.case("and halving a /32 produces exactly those two")
+    let parent = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32).net
+    test.assert(ipnet.eq6(ipnet.half6(parent, 0).net, low))
+    test.assert(ipnet.eq6(ipnet.half6(parent, 1).net, high))
+    test.assert(ipnet.half6(parent, 2).is_ok() == false)
+
+    test.case("an offset inside a /64 is the low half's value")
+    let sixtyfour = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 64).net
+    test.assert(ipnet.index_of6(sixtyfour, ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 7))
+                == 7)
+
+    test.case("and an address outside the network has no offset")
+    test.assert(ipnet.index_of6(sixtyfour, ip.ipv6(0x2001, 0x0DB9, 0, 0, 0, 0, 0, 1))
+                == 0 - 1)

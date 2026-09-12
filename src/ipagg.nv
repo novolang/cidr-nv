@@ -1,0 +1,409 @@
+// ipagg.nv — a pile of networks reduced to the smallest set that covers
+// exactly the same addresses, and the range arithmetic under it.
+//
+// Every body here is a `todo()`; the signatures are the design.
+//
+// EXACTLY THE SAME ADDRESSES.  That is the whole contract of this
+// module and it is worth stating before anything else, because a
+// summariser that is allowed to round up is a summariser that produces
+// a firewall rule letting through an address nobody listed.  Every
+// function here is lossless: `aggregate4` answers a set that holds
+// every address the input held and no address it did not.  A caller
+// who WANTS the rounding-up — "the shortest single prefix covering all
+// of these" — asks `enclosing4`, which is a different call with a
+// different name and says in its own doc comment what it includes.
+//
+// A RANGE IS NOT A NETWORK.  `10.0.0.5 — 10.0.0.9` is five addresses
+// and no CIDR prefix holds exactly those, so a range is its own
+// `@value` type and `range_to_nets4` is the conversion — which answers
+// a LIST, because the minimal cover of an arbitrary range is up to
+// 2 × 32 − 2 networks and that number is small.  That is the one place
+// in this package where a list is the right answer: every other list
+// would have been unbounded.
+//
+// THE INPUT IS A LIST AND SO IS THE OUTPUT, and the package makes no
+// device claim about this module for that reason.  `iptrie`'s device
+// half is what a firmware uses; aggregation is what the host does
+// before it flashes the table.
+
+use ip
+use cidr
+use ipnet
+
+// A contiguous run of IPv4 addresses, first and last included.
+//
+// Kept as a type rather than a pair of addresses because "first and
+// last, both included" is a convention that has to be stated once and
+// not re-argued at each call — an empty range has no spelling here, so
+// `first` is always `<=` `last` and a caller cannot be holding a
+// backwards one.
+pub @value
+struct CidrRange4
+    first: Ipv4
+    last: Ipv4
+
+// A contiguous run of IPv6 addresses, first and last included.
+pub @value
+struct CidrRange6
+    first: Ipv6
+    last: Ipv6
+
+// A range, or the reason there is not one.
+//
+// `@value` again, and the reason again is SPEC § 14.5.
+pub @value
+struct CidrRange4Ans
+    err: Int
+    range: CidrRange4
+
+// An IPv6 range, or the reason there is not one.
+pub @value
+struct CidrRange6Ans
+    err: Int
+    range: CidrRange6
+
+// Whether an answer carries a range.  An error code beside the
+// value is the only shape a `@value` payload can travel in, so
+// "did this work" is a method rather than a `match`.
+impl CidrRange4Ans
+    // True when there is a range here.
+    @tier(embedded)
+    fn is_ok(self) -> Bool
+        todo("cidr-nv.ipagg.CidrRange4Ans.is_ok")
+
+// Whether an answer carries an IPv6 range.
+impl CidrRange6Ans
+    // True when there is a range here.
+    @tier(embedded)
+    fn is_ok(self) -> Bool
+        todo("cidr-nv.ipagg.CidrRange6Ans.is_ok")
+
+// A range from two addresses, in either order.
+//
+// `CidrFamilyMismatch` cannot happen here — the types make it
+// impossible — so the only error is none, and the answer carries an
+// `err` field purely so the two families' constructors have the same
+// shape.
+//
+// ```novo
+// use ip
+// use ipagg
+//
+// fn main() [io]
+//     let r = ipagg.range4(ip.ipv4(10, 0, 0, 9), ip.ipv4(10, 0, 0, 5))
+//     println("${r.range.first.octet(3)}")
+// ```
+pub fn range4(a: Ipv4, b: Ipv4) -> CidrRange4Ans []
+    todo("cidr-nv.ipagg.range4")
+
+// An IPv6 range from two addresses, in either order.
+//
+// ```novo
+// use ip
+// use ipagg
+//
+// fn main() [io]
+//     let lo = ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 1)
+//     let hi = ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 9)
+//     println("${ipagg.range6(lo, hi).is_ok()}")
+// ```
+pub fn range6(a: Ipv6, b: Ipv6) -> CidrRange6Ans []
+    todo("cidr-nv.ipagg.range6")
+
+// The range a network covers: its network address to its broadcast
+// address.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipagg
+//
+// fn main() [io]
+//     let n = cidr.net4(ip.ipv4(192, 0, 2, 0), 24)
+//     println("${ipagg.net_to_range4(n.net).last.octet(3)}")
+// ```
+pub fn net_to_range4(n: Net4) -> CidrRange4 []
+    todo("cidr-nv.ipagg.net_to_range4")
+
+// The range an IPv6 network covers.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipagg
+//
+// fn main() [io]
+//     let n = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32)
+//     println("${ipagg.net_to_range6(n.net).last.group(1)}")
+// ```
+pub fn net_to_range6(n: Net6) -> CidrRange6 []
+    todo("cidr-nv.ipagg.net_to_range6")
+
+// The smallest set of networks that covers `r` exactly.
+//
+// `10.0.0.5 — 10.0.0.9` becomes `10.0.0.5/32`, `10.0.0.6/31`,
+// `10.0.0.8/31`: three networks, five addresses, and not one address
+// more.  At most 62 networks for any IPv4 range.
+//
+// ```novo
+// use std.list
+// use ip
+// use ipagg
+//
+// fn main() [io]
+//     let r = ipagg.range4(ip.ipv4(10, 0, 0, 5), ip.ipv4(10, 0, 0, 9))
+//     println("${list.len(ipagg.range_to_nets4(r.range))}")
+// ```
+pub fn range_to_nets4(r: CidrRange4) -> [Net4] []
+    todo("cidr-nv.ipagg.range_to_nets4")
+
+// The smallest set of IPv6 networks that covers `r` exactly.
+//
+// At most 254 networks for any IPv6 range.
+//
+// ```novo
+// use std.list
+// use ip
+// use ipagg
+//
+// fn main() [io]
+//     let lo = ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 1)
+//     let hi = ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 9)
+//     let r = ipagg.range6(lo, hi)
+//     println("${list.len(ipagg.range_to_nets6(r.range))}")
+// ```
+pub fn range_to_nets6(r: CidrRange6) -> [Net6] []
+    todo("cidr-nv.ipagg.range_to_nets6")
+
+// `nets` reduced to the smallest set covering exactly the same
+// addresses, in ascending order.
+//
+// Overlapping networks are merged, a network inside another is
+// dropped, and two siblings become their parent — repeatedly, until
+// nothing more collapses.  `10.0.0.0/25` and `10.0.0.128/25` become
+// `10.0.0.0/24`; `10.0.0.0/24` and `10.0.1.0/24` become `10.0.0.0/23`;
+// `10.0.0.0/24` and `10.0.2.0/24` stay two, because their parent would
+// also hold `10.0.1.0/24` and nobody listed that.
+//
+// `ipaddress.collapse_addresses` is the reference.
+//
+// ```novo
+// use std.list
+// use ipagg
+//
+// fn main() [io]
+//     println("${list.len(ipagg.aggregate4([]))}")
+// ```
+pub fn aggregate4(nets: [Net4]) -> [Net4] []
+    todo("cidr-nv.ipagg.aggregate4")
+
+// `nets` reduced to the smallest set covering exactly the same
+// addresses.
+//
+// ```novo
+// use std.list
+// use ipagg
+//
+// fn main() [io]
+//     println("${list.len(ipagg.aggregate6([]))}")
+// ```
+pub fn aggregate6(nets: [Net6]) -> [Net6] []
+    todo("cidr-nv.ipagg.aggregate6")
+
+// The single shortest prefix that holds every network in `nets`.
+//
+// THIS ROUNDS UP, and that is the whole difference between it and
+// `aggregate4`: `10.0.0.0/24` and `10.0.2.0/24` enclose as
+// `10.0.0.0/22`, which also holds `10.0.1.0/24` and `10.0.3.0/24` that
+// nobody listed.  Right for "which of my sites is this address near";
+// wrong for a firewall rule, and the name is meant to make a reader
+// stop and decide which they are doing.
+//
+// An empty list answers `CidrNotContained`.
+//
+// ```novo
+// use ipagg
+//
+// fn main() [io]
+//     println("${ipagg.enclosing4([]).is_ok()}")
+// ```
+pub fn enclosing4(nets: [Net4]) -> ipnet.CidrNet4Ans []
+    todo("cidr-nv.ipagg.enclosing4")
+
+// The single shortest IPv6 prefix that holds every network in `nets`.
+//
+// It rounds up; see `enclosing4`.
+//
+// ```novo
+// use ipagg
+//
+// fn main() [io]
+//     println("${ipagg.enclosing6([]).is_ok()}")
+// ```
+pub fn enclosing6(nets: [Net6]) -> ipnet.CidrNet6Ans []
+    todo("cidr-nv.ipagg.enclosing6")
+
+// `n` with `hole` taken out of it: the smallest set of networks
+// covering every address in `n` that is not in `hole`.
+//
+// The call a firewall rule "everything in 10/8 except 10.1.2.0/24" is
+// written with, and the reason it is a function rather than a
+// subtraction is that the answer is up to 24 networks for IPv4 and the
+// caller should not be computing them.
+//
+// `CidrNotContained` reported as the empty list when `hole` is not
+// inside `n`; `exclude4_is_valid` tells that apart from `hole` being
+// the whole of `n`, which legitimately answers nothing.
+//
+// ```novo
+// use std.list
+// use ip
+// use cidr
+// use ipagg
+//
+// fn main() [io]
+//     let big = cidr.net4(ip.ipv4(10, 0, 0, 0), 8)
+//     let hole = cidr.net4(ip.ipv4(10, 1, 2, 0), 24)
+//     println("${list.len(ipagg.exclude4(big.net, hole.net))}")
+// ```
+pub fn exclude4(n: Net4, hole: Net4) -> [Net4] []
+    todo("cidr-nv.ipagg.exclude4")
+
+// Whether `exclude4(n, hole)` answered a cover rather than a refusal —
+// true when `hole` is inside `n`.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipagg
+//
+// fn main() [io]
+//     let big = cidr.net4(ip.ipv4(10, 0, 0, 0), 8)
+//     let hole = cidr.net4(ip.ipv4(192, 0, 2, 0), 24)
+//     println("${ipagg.exclude4_is_valid(big.net, hole.net)}")
+// ```
+pub fn exclude4_is_valid(n: Net4, hole: Net4) -> Bool []
+    todo("cidr-nv.ipagg.exclude4_is_valid")
+
+// `n` with `hole` taken out of it.
+//
+// ```novo
+// use std.list
+// use ip
+// use cidr
+// use ipagg
+//
+// fn main() [io]
+//     let big = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32)
+//     let hole = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 1, 0, 0, 0, 0, 0), 48)
+//     println("${list.len(ipagg.exclude6(big.net, hole.net))}")
+// ```
+pub fn exclude6(n: Net6, hole: Net6) -> [Net6] []
+    todo("cidr-nv.ipagg.exclude6")
+
+// Whether `exclude6(n, hole)` answered a cover rather than a refusal.
+//
+// ```novo
+// use ip
+// use cidr
+// use ipagg
+//
+// fn main() [io]
+//     let big = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 0), 32)
+//     let hole = cidr.net6(ip.ipv6(0x2001, 0x0DB8, 1, 0, 0, 0, 0, 0), 48)
+//     println("${ipagg.exclude6_is_valid(big.net, hole.net)}")
+// ```
+pub fn exclude6_is_valid(n: Net6, hole: Net6) -> Bool []
+    todo("cidr-nv.ipagg.exclude6_is_valid")
+
+// Everything in `a` that is not in any of `b`, aggregated.
+//
+// `exclude4` repeated over a list, which is the call an allow-list
+// minus a deny-list is, and which a caller folding `exclude4` by hand
+// gets wrong because each hole has to be applied to every network the
+// previous one produced.
+//
+// ```novo
+// use std.list
+// use ipagg
+//
+// fn main() [io]
+//     println("${list.len(ipagg.difference4([], []))}")
+// ```
+pub fn difference4(a: [Net4], b: [Net4]) -> [Net4] []
+    todo("cidr-nv.ipagg.difference4")
+
+// Everything in `a` that is not in any of `b`, aggregated.
+//
+// ```novo
+// use std.list
+// use ipagg
+//
+// fn main() [io]
+//     println("${list.len(ipagg.difference6([], []))}")
+// ```
+pub fn difference6(a: [Net6], b: [Net6]) -> [Net6] []
+    todo("cidr-nv.ipagg.difference6")
+
+// Everything in both `a` and `b`, aggregated.
+//
+// ```novo
+// use std.list
+// use ipagg
+//
+// fn main() [io]
+//     println("${list.len(ipagg.intersection4([], []))}")
+// ```
+pub fn intersection4(a: [Net4], b: [Net4]) -> [Net4] []
+    todo("cidr-nv.ipagg.intersection4")
+
+// Everything in both `a` and `b`, aggregated.
+//
+// ```novo
+// use std.list
+// use ipagg
+//
+// fn main() [io]
+//     println("${list.len(ipagg.intersection6([], []))}")
+// ```
+pub fn intersection6(a: [Net6], b: [Net6]) -> [Net6] []
+    todo("cidr-nv.ipagg.intersection6")
+
+// True when every address in `a` is in one of `b`.
+//
+// The question "is my allow-list a subset of what my provider routes"
+// is, and the one a `for` loop over `subnet_of4` answers wrongly,
+// because a network can be covered by two of `b` between them without
+// being inside either.
+//
+// ```novo
+// use ipagg
+//
+// fn main() [io]
+//     println("${ipagg.covered_by4([], [])}")
+// ```
+pub fn covered_by4(a: [Net4], b: [Net4]) -> Bool []
+    todo("cidr-nv.ipagg.covered_by4")
+
+// True when every address in `a` is in one of `b`.
+//
+// ```novo
+// use ipagg
+//
+// fn main() [io]
+//     println("${ipagg.covered_by6([], [])}")
+// ```
+pub fn covered_by6(a: [Net6], b: [Net6]) -> Bool []
+    todo("cidr-nv.ipagg.covered_by6")
+
+// How many addresses the networks in `nets` cover between them, after
+// aggregation, or `-1` when the answer needs more than 64 bits.
+//
+// ```novo
+// use ipagg
+//
+// fn main() [io]
+//     println("${ipagg.total_addresses4([])}")
+// ```
+pub fn total_addresses4(nets: [Net4]) -> Int []
+    todo("cidr-nv.ipagg.total_addresses4")

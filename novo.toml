@@ -1,6 +1,6 @@
 [package]
 name        = "cidr-nv"
-version     = "0.0.1"
+version     = "0.0.2"
 description = "Subnet arithmetic over ipaddr-nv's networks: subnet-of and supernet, subnets and hosts as index arithmetic rather than lists, a list of networks aggregated into its minimal cover, the IANA special-purpose registries as predicates on a network, reverse-DNS names both ways, and a prefix trie for longest-prefix match that a device firewall can run on raw integers.  Interface only — every body is a todo()."
 license     = "Apache-2.0"
 
